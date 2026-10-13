@@ -29,48 +29,47 @@ def _extract_bearer_token(request: Request) -> str:
 def _verify_jwt(token: str, settings: Settings) -> str:
     """Verify Supabase JWT and return user_id (sub claim).
 
-    Uses the configured JWT secret for HS256 verification.
-    For production, JWKS-based RS256 verification is recommended.
+    Uses configured JWT secret for HS256 verification if set,
+    or falls back to Supabase Auth client verification (per docs/API_CONTRACTS.md).
     """
-    if not settings.supabase_jwt_secret:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "code": "INTERNAL_ERROR",
-                "message": "JWT verification not configured.",
-            },
-        )
+    # 1. Fast local verification if JWT secret is configured
+    if settings.supabase_jwt_secret:
+        try:
+            payload = jwt.decode(
+                token,
+                settings.supabase_jwt_secret,
+                algorithms=["HS256"],
+                audience="authenticated",
+            )
+            user_id = payload.get("sub")
+            if user_id:
+                try:
+                    uuid.UUID(user_id)
+                    return user_id
+                except ValueError:
+                    pass
+        except JWTError:
+            pass
 
+    # 2. Supported Supabase verification method via Supabase client (per docs/API_CONTRACTS.md)
     try:
-        payload = jwt.decode(
-            token,
-            settings.supabase_jwt_secret,
-            algorithms=["HS256"],
-            audience="authenticated",
-        )
-    except JWTError as exc:
+        from app.database import get_supabase_client
+        client = get_supabase_client()
+        user_response = client.auth.get_user(token)
+        if user_response and user_response.user and user_response.user.id:
+            user_id = user_response.user.id
+            uuid.UUID(user_id)
+            return user_id
+    except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "UNAUTHENTICATED", "message": "Invalid or expired token."},
         ) from exc
 
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "UNAUTHENTICATED", "message": "Token missing subject claim."},
-        )
-
-    # Validate it's a proper UUID
-    try:
-        uuid.UUID(user_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "UNAUTHENTICATED", "message": "Invalid user ID in token."},
-        ) from exc
-
-    return user_id
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"code": "UNAUTHENTICATED", "message": "Invalid or expired token."},
+    )
 
 
 async def get_current_user(
@@ -85,6 +84,8 @@ async def get_current_user(
             ...
     """
     token = _extract_bearer_token(request)
+    from app.database import set_current_request_token
+    set_current_request_token(token)
     return _verify_jwt(token, settings)
 
 

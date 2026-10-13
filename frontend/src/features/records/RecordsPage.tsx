@@ -82,7 +82,11 @@ export const RecordsPage: React.FC = () => {
       await api.deleteRecord(activeCRM.crm_id, activeEntity.name, deletingRecord.id);
       success('Record soft-deleted successfully.');
       setDeletingRecord(null);
-      fetchRecords();
+      if (records.length === 1 && page > 0) {
+        setPage((prev) => Math.max(0, prev - 1));
+      } else {
+        fetchRecords();
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to delete record';
       toastError(msg);

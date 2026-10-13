@@ -43,7 +43,8 @@ export const CSVImportModal: React.FC<CSVImportModalProps> = ({
     // Read and parse preview lines
     try {
       const text = await selected.text();
-      const lines = text.split('\n').filter((l) => l.trim().length > 0);
+      const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      const lines = normalized.split('\n').filter((l) => l.trim().length > 0);
       if (lines.length > 0) {
         const headerRow = lines[0].split(',').map((h) => h.trim());
         setHeaders(headerRow);

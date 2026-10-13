@@ -40,6 +40,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const isDemoStored = localStorage.getItem('aura_demo_session') === 'true';
     if (isDemoStored) {
       setUser(DEMO_USER);
+      setUseMockMode(true);
+      setIsMockModeState(true);
       setIsLoading(false);
       return;
     }
@@ -54,6 +56,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
+      if (session) {
+        setUseMockMode(false);
+        setIsMockModeState(false);
+      }
       setIsLoading(false);
     }).catch(() => {
       setIsLoading(false);
@@ -64,6 +70,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       (_event, session) => {
         setSession(session);
         setUser(session?.user ?? null);
+        if (session) {
+          localStorage.removeItem('aura_demo_session');
+          setUseMockMode(false);
+          setIsMockModeState(false);
+        }
         setIsLoading(false);
       }
     );
@@ -79,9 +90,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       loginAsDemoUser();
       return {};
     }
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error, data } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
       return { error: error.message };
+    }
+    if (data.session) {
+      localStorage.removeItem('aura_demo_session');
+      setUseMockMode(false);
+      setIsMockModeState(false);
     }
     return {};
   };
@@ -103,6 +119,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signOut = async () => {
     localStorage.removeItem('aura_demo_session');
+    setUseMockMode(false);
+    setIsMockModeState(false);
     if (isSupabaseConfigured) {
       await supabase.auth.signOut();
     }
@@ -123,6 +141,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const loginAsDemoUser = () => {
     localStorage.setItem('aura_demo_session', 'true');
+    setUseMockMode(true);
+    setIsMockModeState(true);
     setUser(DEMO_USER);
   };
 

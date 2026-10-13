@@ -36,8 +36,7 @@ export const SettingsPage: React.FC = () => {
     checkHealth();
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.access_token) {
-        const t = session.access_token;
-        setSessionTokenSnippet(`${t.slice(0, 10)}...${t.slice(-10)}`);
+        setSessionTokenSnippet('Active (Valid Supabase JWT Session)');
       } else {
         setSessionTokenSnippet('Demo Memory Session');
       }

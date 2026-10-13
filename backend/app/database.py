@@ -12,21 +12,49 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+import contextvars
 from supabase import create_client, Client
 
 from app.config import get_settings
 
 
 _client: Client | None = None
+_request_token_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_request_token_var", default=None
+)
+
+
+def set_current_request_token(token: str | None) -> None:
+    """Set the active user JWT token for the current async request context."""
+    _request_token_var.set(token)
 
 
 def get_supabase_client() -> Client:
-    """Get or create the Supabase client (service-role for server-side ops)."""
+    """Get or create the Supabase client.
+
+    If a service-role key is configured, uses it for server-side operations.
+    Otherwise, if a user request JWT token is active in context, scopes
+    PostgREST with client.postgrest.auth(token) to enforce database RLS.
+    """
     global _client
+    settings = get_settings()
+
+    # If service-role key is configured, use service-role client
+    if settings.supabase_service_role_key:
+        if _client is None:
+            _client = create_client(settings.supabase_url, settings.supabase_service_role_key)
+        return _client
+
+    # In development/hackathon without service-role key:
+    # Use request-scoped user token to enforce RLS
+    token = _request_token_var.get()
+    if token:
+        user_scoped_client = create_client(settings.supabase_url, settings.supabase_anon_key)
+        user_scoped_client.postgrest.auth(token)
+        return user_scoped_client
+
     if _client is None:
-        settings = get_settings()
-        key = settings.supabase_service_role_key or settings.supabase_anon_key
-        _client = create_client(settings.supabase_url, key)
+        _client = create_client(settings.supabase_url, settings.supabase_anon_key)
     return _client
 
 
