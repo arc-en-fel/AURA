@@ -29,36 +29,52 @@ def _extract_bearer_token(request: Request) -> str:
 def _verify_jwt(token: str, settings: Settings) -> str:
     """Verify Supabase JWT and return user_id (sub claim).
 
-    Uses the configured JWT secret for HS256 verification.
-    For production, JWKS-based RS256 verification is recommended.
+    1. If `supabase_jwt_secret` is configured, verifies locally with HS256.
+    2. Otherwise, verifies against Supabase Auth via GoTrue (`client.auth.get_user(token)`).
+    3. Never bypasses authentication; always extracts and validates user UUID.
     """
-    if not settings.supabase_jwt_secret:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "code": "INTERNAL_ERROR",
-                "message": "JWT verification not configured.",
-            },
-        )
+    user_id: str | None = None
 
-    try:
-        payload = jwt.decode(
-            token,
-            settings.supabase_jwt_secret,
-            algorithms=["HS256"],
-            audience="authenticated",
-        )
-    except JWTError as exc:
+    # Strategy 1: Local JWT verification via configured secret
+    if settings.supabase_jwt_secret:
+        try:
+            payload = jwt.decode(
+                token,
+                settings.supabase_jwt_secret,
+                algorithms=["HS256"],
+                audience="authenticated",
+            )
+            user_id = payload.get("sub")
+        except JWTError:
+            user_id = None
+
+    # Strategy 2: Supabase GoTrue Auth verification
+    if not user_id:
+        if settings.supabase_url and settings.supabase_anon_key and settings.supabase_anon_key != "mock-anon-key":
+            try:
+                from app.database import get_supabase_client
+                client = get_supabase_client()
+                user_resp = client.auth.get_user(token)
+                if user_resp and user_resp.user and user_resp.user.id:
+                    user_id = str(user_resp.user.id)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail={"code": "UNAUTHENTICATED", "message": "Invalid or expired token."},
+                ) from exc
+
+    if not user_id:
+        if not settings.supabase_jwt_secret and (not settings.supabase_url or settings.supabase_anon_key == "mock-anon-key"):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "code": "INTERNAL_ERROR",
+                    "message": "JWT verification not configured on server.",
+                },
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "UNAUTHENTICATED", "message": "Invalid or expired token."},
-        ) from exc
-
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "UNAUTHENTICATED", "message": "Token missing subject claim."},
         )
 
     # Validate it's a proper UUID

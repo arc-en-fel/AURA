@@ -201,8 +201,26 @@ async def apply_proposal(
     if proposal["status"] != "approved":
         return error_response(422, "VALIDATION_ERROR", f"Proposal is '{proposal['status']}', not approved.")
 
-    # The database function is authoritative for validation, staleness, and
-    # every mutation. The route only checks access and translates its result.
+    # Staleness check
+    if proposal.get("configuration_version_at_creation") != crm.get("configuration_version"):
+        return error_response(409, "CONFLICT", "Configuration has changed since proposal creation.")
+
+    # Validate change payload
+    change = proposal.get("proposed_change", {})
+    change_type = change.get("type")
+    if change_type not in ("workflow.update", "workflow.create"):
+        return error_response(422, "VALIDATION_ERROR", "Proposed change type not allowlisted.")
+    if change_type == "workflow.update":
+        if not change.get("workflow_id"):
+            return error_response(422, "VALIDATION_ERROR", "workflow.update requires workflow_id.")
+        if "delay_hours" not in change or change.get("delay_hours") is None:
+            return error_response(422, "VALIDATION_ERROR", "workflow.update requires delay_hours.")
+    elif change_type == "workflow.create":
+        if not change.get("name"):
+            return error_response(422, "VALIDATION_ERROR", "workflow.create requires non-empty name.")
+
+    # The database function is authoritative for atomic execution in PostgreSQL.
+    # The route checks access and translates its result.
     try:
         result = repo.apply_proposal(str(proposal_id))
 

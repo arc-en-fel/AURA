@@ -43,7 +43,11 @@ class Settings(BaseSettings):
         description="Comma-separated CORS origins",
     )
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+    model_config = {
+        "env_file": (".env", "backend/.env"),
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
     @property
     def cors_origin_list(self) -> list[str]:

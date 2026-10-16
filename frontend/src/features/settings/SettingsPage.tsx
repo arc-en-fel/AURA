@@ -16,31 +16,85 @@ export const SettingsPage: React.FC = () => {
   const { isMockMode, toggleMockMode } = useAuth();
 
   const [backendHealth, setBackendHealth] = useState<'checking' | 'connected' | 'offline'>('checking');
-  const [sessionTokenSnippet, setSessionTokenSnippet] = useState<string>('None');
+  const [backendDetails, setBackendDetails] = useState<{
+    status?: string;
+    app_name?: string;
+    version?: string;
+    database?: string;
+    auth?: string;
+    error?: string;
+    checkedAt?: string;
+  }>({});
+  const [authStatus, setAuthStatus] = useState<{
+    state: 'configured' | 'missing' | 'error';
+    sessionState: string;
+    userEmail?: string;
+  }>({
+    state: isSupabaseConfigured ? 'configured' : 'missing',
+    sessionState: 'Checking session...',
+  });
 
   const checkHealth = async () => {
     setBackendHealth('checking');
     try {
       const res = await fetch('/api/v1/health');
       if (res.ok) {
+        const body = await res.json();
         setBackendHealth('connected');
+        setBackendDetails({
+          ...body.data,
+          checkedAt: new Date().toLocaleTimeString(),
+        });
       } else {
         setBackendHealth('offline');
+        setBackendDetails({
+          error: `HTTP ${res.status}: ${res.statusText}`,
+          checkedAt: new Date().toLocaleTimeString(),
+        });
       }
-    } catch {
+    } catch (err: unknown) {
       setBackendHealth('offline');
+      setBackendDetails({
+        error: err instanceof Error ? err.message : 'Backend server unreachable at port 8000',
+        checkedAt: new Date().toLocaleTimeString(),
+      });
     }
   };
 
   useEffect(() => {
     checkHealth();
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.access_token) {
-        setSessionTokenSnippet('Active (Valid Supabase JWT Session)');
-      } else {
-        setSessionTokenSnippet('Demo Memory Session');
-      }
-    });
+    if (isSupabaseConfigured) {
+      supabase.auth.getSession().then(({ data: { session }, error }) => {
+        if (error) {
+          setAuthStatus({
+            state: 'error',
+            sessionState: `Authentication error: ${error.message}`,
+          });
+        } else if (session?.user) {
+          setAuthStatus({
+            state: 'configured',
+            sessionState: 'Active Authenticated Session',
+            userEmail: session.user.email || 'Authenticated User',
+          });
+        } else {
+          setAuthStatus({
+            state: 'configured',
+            sessionState: 'Configured (No active user session — please log in)',
+          });
+        }
+      }).catch((err) => {
+        setAuthStatus({
+          state: 'error',
+          sessionState: `Failed to inspect session: ${err.message}`,
+        });
+      });
+    } else {
+      const isDemo = localStorage.getItem('aura_demo_session') === 'true';
+      setAuthStatus({
+        state: 'missing',
+        sessionState: isDemo ? 'Demo Memory Session (Temporary Evaluation)' : 'Missing Configuration in frontend/.env',
+      });
+    }
   }, []);
 
   return (
@@ -67,17 +121,31 @@ export const SettingsPage: React.FC = () => {
               </div>
             </div>
             {backendHealth === 'connected' ? (
-              <Badge variant="active">Live & Healthy</Badge>
+              <Badge variant="active">Connected & Healthy</Badge>
             ) : backendHealth === 'checking' ? (
               <Badge variant="draft">Checking...</Badge>
             ) : (
-              <Badge variant="rejected">Offline / Standalone</Badge>
+              <Badge variant="rejected">Offline / Unreachable</Badge>
             )}
           </div>
 
           <p className="text-xs text-slate-500">
             Base URL: <code className="bg-slate-100 px-1.5 py-0.5 rounded font-mono text-[11px] text-aura-deep">/api/v1</code> (Proxied via Vite to port 8000).
           </p>
+
+          {backendDetails.checkedAt && (
+            <p className="text-[11px] text-slate-500">
+              Last check: <span className="font-medium text-slate-700">{backendDetails.checkedAt}</span>
+              {backendDetails.error && (
+                <span className="block text-rose-600 mt-1">Error: {backendDetails.error}</span>
+              )}
+              {backendDetails.status === 'ok' && (
+                <span className="block text-emerald-700 mt-1">
+                  Database: {backendDetails.database} • Auth: {backendDetails.auth}
+                </span>
+              )}
+            </p>
+          )}
 
           <Button
             variant="outline"
@@ -98,23 +166,28 @@ export const SettingsPage: React.FC = () => {
               </div>
               <div>
                 <h3 className="font-bold text-sm text-aura-navy">Supabase Authentication</h3>
-                <span className="text-[10px] text-slate-400">JWT Bearer Verification</span>
+                <span className="text-[10px] text-slate-400">JWT Session Verification</span>
               </div>
             </div>
-            {isSupabaseConfigured ? (
+            {authStatus.state === 'configured' ? (
               <Badge variant="active">Configured</Badge>
+            ) : authStatus.state === 'error' ? (
+              <Badge variant="rejected">Auth Error</Badge>
             ) : (
-              <Badge variant="pending">Demo Mode</Badge>
+              <Badge variant="pending">Missing Config</Badge>
             )}
           </div>
 
           <p className="text-xs text-slate-500">
-            Publishable Client URL: <code className="bg-slate-100 px-1.5 py-0.5 rounded font-mono text-[11px]">{import.meta.env.VITE_SUPABASE_URL || 'Configured via .env'}</code>
+            Project URL: <code className="bg-slate-100 px-1.5 py-0.5 rounded font-mono text-[11px]">{import.meta.env.VITE_SUPABASE_URL || 'Configured via .env'}</code>
           </p>
 
           <div className="pt-1 flex items-center gap-2 text-xs text-slate-600">
             <Key className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            <span className="truncate">Active Token: <code className="font-mono">{sessionTokenSnippet}</code></span>
+            <span className="truncate">
+              Session: <span className="font-semibold">{authStatus.sessionState}</span>
+              {authStatus.userEmail && ` (${authStatus.userEmail})`}
+            </span>
           </div>
         </Card>
       </div>
@@ -127,8 +200,13 @@ export const SettingsPage: React.FC = () => {
               <Cpu className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="font-bold text-sm text-aura-navy">Frontend Adapter Mode</h3>
-              <p className="text-xs text-slate-500">
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-sm text-aura-navy">Frontend Adapter Mode</h3>
+                <Badge variant={isMockMode ? 'pending' : 'active'}>
+                  {isMockMode ? 'Mock Adapter' : 'FastAPI Live'}
+                </Badge>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
                 Switch between live FastAPI network calls and standalone in-memory mock adapter.
               </p>
             </div>
@@ -151,6 +229,12 @@ export const SettingsPage: React.FC = () => {
             </Button>
           </div>
         </div>
+
+        {!isMockMode && backendHealth === 'offline' && (
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+            <span className="font-bold">Notice:</span> FastAPI Live mode is active, but the backend is currently offline. Start the backend using <code className="bg-amber-100 px-1 py-0.5 rounded font-mono text-[11px]">.\start-dev.bat</code> on port 8000.
+          </div>
+        )}
       </Card>
 
       {/* Member 3 & Architecture Boundaries Card */}

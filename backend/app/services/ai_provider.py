@@ -195,7 +195,19 @@ class MockAIProvider(AIProvider):
 
 def get_ai_provider(provider_name: str = "mock") -> AIProvider:
     """Factory function to get the configured AI provider."""
-    if provider_name == "mock":
+    normalized = (provider_name or "mock").lower().strip()
+    if normalized == "mock":
         return MockAIProvider()
-    # Placeholder for real providers
-    raise ValueError(f"Unsupported AI provider: {provider_name}. Use 'mock' for demos.")
+    if normalized in ("local", "ollama"):
+        from app.config import get_settings
+        from app.services.laya_runtime import LayaDecisionEngine
+        from app.services.ollama_provider import OllamaAIProvider
+
+        settings = get_settings()
+        return OllamaAIProvider(
+            base_url=settings.local_llm_base_url,
+            model=settings.local_llm_model or "qwen3:4b",
+            enable_fallback=True,
+            decision_engine=LayaDecisionEngine(),
+        )
+    raise ValueError(f"Unsupported AI provider: {provider_name}. Use 'mock' or 'local' for demos.")

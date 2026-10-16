@@ -223,6 +223,38 @@ export async function runFrontendTests() {
     assert(false, `8. Supabase OAuth Audit error: ${e}`);
   }
 
+  // Test 9: Live Adapter Selection & No Silent Mock Fallback
+  try {
+    const { api, setUseMockMode, getUseMockMode } = await import('../services/api');
+
+    // 9.1 Adapter mode toggle
+    setUseMockMode(false);
+    assert(getUseMockMode() === false, '9.1 FastAPI Live mode can be explicitly activated');
+
+    // 9.2 Verify live mode does not silently fallback to mock data on network error
+    let threwErrorInLiveMode = false;
+    try {
+      // Calling generateCRM in live mode when no server is on port 8000 during test
+      await api.generateCRM('Create an aerospace parts tracking CRM');
+    } catch (err: unknown) {
+      threwErrorInLiveMode = true;
+      const msg = err instanceof Error ? err.message : String(err);
+      assert(
+        msg.includes('Failed to connect to backend') || msg.includes('ECONNREFUSED') || msg.includes('fetch failed'),
+        '9.2 Live mode throws explicit network error instead of silently returning mock data'
+      );
+    }
+    assert(threwErrorInLiveMode, '9.3 Live mode strictly rejects silent mock fallback');
+
+    // 9.3 Switch back to mock mode for isolated unit tests
+    setUseMockMode(true);
+    assert(getUseMockMode() === true, '9.4 Explicit mock adapter mode can be restored');
+    const mockRes = await api.generateCRM('healthcare clinic');
+    assert(mockRes.configuration.industry === 'healthcare', '9.5 Mock adapter serves in-memory responses when explicitly active');
+  } catch (e) {
+    assert(false, `9. Live Adapter & Error Handling error: ${e}`);
+  }
+
   console.log(`\n📊 Test Results: ${passed} Passed, ${failed} Failed`);
   return { passed, failed };
 }

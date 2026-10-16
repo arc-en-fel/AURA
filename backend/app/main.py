@@ -43,10 +43,24 @@ def create_app() -> FastAPI:
     app.include_router(workflows.router, prefix=api_prefix)
     app.include_router(evolution.router, prefix=api_prefix)
 
-    # Health check
+    def _health_payload() -> dict[str, str]:
+        return {
+            "status": "ok",
+            "app_name": settings.app_name,
+            "version": "0.1.0",
+            "environment": "development" if settings.debug else "production",
+            "database": "configured" if settings.supabase_url and "localhost" not in settings.supabase_url else "unconfigured",
+            "auth": "configured" if settings.supabase_jwt_secret or (settings.supabase_anon_key and settings.supabase_anon_key != "mock-anon-key") else "demo",
+        }
+
+    # Health checks
+    @app.get("/health", tags=["Health"])
+    async def root_health():
+        return success_response(_health_payload())
+
     @app.get(f"{api_prefix}/health", tags=["Health"])
     async def health_check():
-        return success_response({"status": "ok"})
+        return success_response(_health_payload())
 
     from fastapi import HTTPException
 

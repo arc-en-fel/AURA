@@ -166,11 +166,6 @@ async function request<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  // If mock mode is explicitly activated, throw to fall back to mock handler
-  if (getUseMockMode()) {
-    throw new Error('MOCK_MODE_ACTIVE');
-  }
-
   // Get active Supabase session token
   const { data: sessionData } = await supabase.auth.getSession();
   const token = sessionData.session?.access_token;
@@ -200,7 +195,12 @@ async function request<T>(
     throw new Error(`Failed to connect to backend at ${url}: ${errorMsg}`);
   }
 
-  const json = await response.json();
+  let json: unknown;
+  try {
+    json = await response.json();
+  } catch {
+    throw new Error(`Invalid response from backend (${response.status} ${response.statusText})`);
+  }
 
   if (!response.ok) {
     const errorPayload = json as ApiErrorEnvelope;
@@ -222,79 +222,63 @@ async function request<T>(
 export const api = {
   // 1. CRM Generation (Draft only, not persisted)
   async generateCRM(prompt: string): Promise<GenerateCRMResponse> {
-    try {
-      return await request<GenerateCRMResponse>('/crm/generate', {
-        method: 'POST',
-        body: JSON.stringify({ prompt }),
-      });
-    } catch (err) {
-      if (getUseMockMode() || (err instanceof Error && err.message.includes('Failed to connect'))) {
-        await new Promise((r) => setTimeout(r, 800));
-        return mockStorage.generateCRM(prompt);
-      }
-      throw err;
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 800));
+      return mockStorage.generateCRM(prompt);
     }
+    return await request<GenerateCRMResponse>('/crm/generate', {
+      method: 'POST',
+      body: JSON.stringify({ prompt }),
+    });
   },
 
   // 2. Save CRM (Persist to database)
   async saveCRM(configuration: CRMConfiguration): Promise<CRMSummary> {
-    try {
-      return await request<CRMSummary>('/crm', {
-        method: 'POST',
-        body: JSON.stringify({ configuration }),
-      });
-    } catch (err) {
-      if (getUseMockMode() || (err instanceof Error && err.message.includes('Failed to connect'))) {
-        await new Promise((r) => setTimeout(r, 600));
-        const newCrm: CRMSummary = {
-          crm_id: crypto.randomUUID(),
-          name: configuration.name,
-          status: 'active',
-          configuration_version: 1,
-          configuration,
-        };
-        mockStorage.crms.unshift(newCrm);
-        return newCrm;
-      }
-      throw err;
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 600));
+      const newCrm: CRMSummary = {
+        crm_id: crypto.randomUUID(),
+        name: configuration.name,
+        status: 'active',
+        configuration_version: 1,
+        configuration,
+      };
+      mockStorage.crms.unshift(newCrm);
+      return newCrm;
     }
+    return await request<CRMSummary>('/crm', {
+      method: 'POST',
+      body: JSON.stringify({ configuration }),
+    });
   },
 
   // 3. List CRMs
   async listCRMs(limit = 20, offset = 0): Promise<CRMListResponse> {
-    try {
-      return await request<CRMListResponse>(`/crm?limit=${limit}&offset=${offset}`, {
-        method: 'GET',
-      });
-    } catch (err) {
-      if (getUseMockMode() || (err instanceof Error && err.message.includes('Failed to connect'))) {
-        await new Promise((r) => setTimeout(r, 300));
-        return {
-          items: mockStorage.crms.slice(offset, offset + limit),
-          total: mockStorage.crms.length,
-          limit,
-          offset,
-        };
-      }
-      throw err;
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 300));
+      return {
+        items: mockStorage.crms.slice(offset, offset + limit),
+        total: mockStorage.crms.length,
+        limit,
+        offset,
+      };
     }
+    return await request<CRMListResponse>(`/crm?limit=${limit}&offset=${offset}`, {
+      method: 'GET',
+    });
   },
 
   // 4. Get Single CRM
   async getCRM(crmId: string): Promise<CRMSummary> {
-    try {
-      return await request<CRMSummary>(`/crm/${crmId}`, {
-        method: 'GET',
-      });
-    } catch (err) {
-      if (getUseMockMode() || (err instanceof Error && err.message.includes('Failed to connect'))) {
-        await new Promise((r) => setTimeout(r, 200));
-        const found = mockStorage.crms.find((c) => c.crm_id === crmId);
-        if (!found) throw new Error('CRM not found');
-        return found;
-      }
-      throw err;
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 200));
+      const found = mockStorage.crms.find((c) => c.crm_id === crmId);
+      if (!found) throw new Error('CRM not found');
+      return found;
     }
+    return await request<CRMSummary>(`/crm/${crmId}`, {
+      method: 'GET',
+    });
   },
 
   // 5. List Dynamic Records
@@ -304,28 +288,24 @@ export const api = {
     limit = 20,
     offset = 0
   ): Promise<RecordListResponse> {
-    try {
-      return await request<RecordListResponse>(
-        `/crm/${crmId}/records/${entityName}?limit=${limit}&offset=${offset}`,
-        {
-          method: 'GET',
-        }
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 300));
+      const filtered = mockStorage.records.filter(
+        (r) => r.crm_id === crmId && r.entity_name === entityName
       );
-    } catch (err) {
-      if (getUseMockMode() || (err instanceof Error && err.message.includes('Failed to connect'))) {
-        await new Promise((r) => setTimeout(r, 300));
-        const filtered = mockStorage.records.filter(
-          (r) => r.crm_id === crmId && r.entity_name === entityName
-        );
-        return {
-          items: filtered.slice(offset, offset + limit),
-          total: filtered.length,
-          limit,
-          offset,
-        };
-      }
-      throw err;
+      return {
+        items: filtered.slice(offset, offset + limit),
+        total: filtered.length,
+        limit,
+        offset,
+      };
     }
+    return await request<RecordListResponse>(
+      `/crm/${crmId}/records/${entityName}?limit=${limit}&offset=${offset}`,
+      {
+        method: 'GET',
+      }
+    );
   },
 
   // 6. Create Record
@@ -335,28 +315,24 @@ export const api = {
     data: Record<string, unknown>,
     source?: string
   ): Promise<CRMRecord> {
-    try {
-      return await request<CRMRecord>(`/crm/${crmId}/records/${entityName}`, {
-        method: 'POST',
-        body: JSON.stringify({ data, source }),
-      });
-    } catch (err) {
-      if (getUseMockMode() || (err instanceof Error && err.message.includes('Failed to connect'))) {
-        await new Promise((r) => setTimeout(r, 400));
-        const newRecord: CRMRecord = {
-          id: crypto.randomUUID(),
-          crm_id: crmId,
-          entity_name: entityName,
-          data,
-          source: source || 'Manual',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        };
-        mockStorage.records.unshift(newRecord);
-        return newRecord;
-      }
-      throw err;
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 400));
+      const newRecord: CRMRecord = {
+        id: crypto.randomUUID(),
+        crm_id: crmId,
+        entity_name: entityName,
+        data,
+        source: source || 'Manual',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      mockStorage.records.unshift(newRecord);
+      return newRecord;
     }
+    return await request<CRMRecord>(`/crm/${crmId}/records/${entityName}`, {
+      method: 'POST',
+      body: JSON.stringify({ data, source }),
+    });
   },
 
   // 7. Update Record
@@ -366,28 +342,24 @@ export const api = {
     recordId: string,
     data: Record<string, unknown>
   ): Promise<CRMRecord> {
-    try {
-      return await request<CRMRecord>(
-        `/crm/${crmId}/records/${entityName}/${recordId}`,
-        {
-          method: 'PATCH',
-          body: JSON.stringify({ data }),
-        }
-      );
-    } catch (err) {
-      if (getUseMockMode() || (err instanceof Error && err.message.includes('Failed to connect'))) {
-        await new Promise((r) => setTimeout(r, 300));
-        const idx = mockStorage.records.findIndex((r) => r.id === recordId);
-        if (idx === -1) throw new Error('Record not found');
-        mockStorage.records[idx] = {
-          ...mockStorage.records[idx],
-          data: { ...mockStorage.records[idx].data, ...data },
-          updated_at: new Date().toISOString(),
-        };
-        return mockStorage.records[idx];
-      }
-      throw err;
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 300));
+      const idx = mockStorage.records.findIndex((r) => r.id === recordId);
+      if (idx === -1) throw new Error('Record not found');
+      mockStorage.records[idx] = {
+        ...mockStorage.records[idx],
+        data: { ...mockStorage.records[idx].data, ...data },
+        updated_at: new Date().toISOString(),
+      };
+      return mockStorage.records[idx];
     }
+    return await request<CRMRecord>(
+      `/crm/${crmId}/records/${entityName}/${recordId}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ data }),
+      }
+    );
   },
 
   // 8. Delete Record
@@ -396,21 +368,17 @@ export const api = {
     entityName: string,
     recordId: string
   ): Promise<{ deleted: boolean }> {
-    try {
-      return await request<{ deleted: boolean }>(
-        `/crm/${crmId}/records/${entityName}/${recordId}`,
-        {
-          method: 'DELETE',
-        }
-      );
-    } catch (err) {
-      if (getUseMockMode() || (err instanceof Error && err.message.includes('Failed to connect'))) {
-        await new Promise((r) => setTimeout(r, 250));
-        mockStorage.records = mockStorage.records.filter((r) => r.id !== recordId);
-        return { deleted: true };
-      }
-      throw err;
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 250));
+      mockStorage.records = mockStorage.records.filter((r) => r.id !== recordId);
+      return { deleted: true };
     }
+    return await request<{ deleted: boolean }>(
+      `/crm/${crmId}/records/${entityName}/${recordId}`,
+      {
+        method: 'DELETE',
+      }
+    );
   },
 
   // 9. Import CSV
@@ -419,68 +387,60 @@ export const api = {
     entityName: string,
     file: File
   ): Promise<ImportResult> {
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      return await request<ImportResult>(
-        `/crm/${crmId}/records/${entityName}/import`,
-        {
-          method: 'POST',
-          body: formData,
-        }
-      );
-    } catch (err) {
-      if (getUseMockMode() || (err instanceof Error && err.message.includes('Failed to connect'))) {
-        await new Promise((r) => setTimeout(r, 600));
-        // Mock CSV parse simulation
-        const text = await file.text();
-        const lines = text.split('\n').filter((l) => l.trim().length > 0);
-        if (lines.length <= 1) {
-          return { created: 0, skipped: 0, errors: [{ row: 1, code: 'EMPTY_FILE', message: 'No data rows found.' }] };
-        }
-        const headers = lines[0].split(',').map((h) => h.trim());
-        let created = 0;
-        for (let i = 1; i < lines.length; i++) {
-          const cols = lines[i].split(',').map((c) => c.trim());
-          const rowData: Record<string, unknown> = {};
-          headers.forEach((h, idx) => {
-            if (cols[idx]) rowData[h] = cols[idx];
-          });
-          mockStorage.records.push({
-            id: crypto.randomUUID(),
-            crm_id: crmId,
-            entity_name: entityName,
-            data: rowData,
-            source: 'CSV',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          });
-          created++;
-        }
-        return {
-          created,
-          skipped: 0,
-          errors: [],
-        };
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 600));
+      // Mock CSV parse simulation
+      const text = await file.text();
+      const lines = text.split('\n').filter((l) => l.trim().length > 0);
+      if (lines.length <= 1) {
+        return { created: 0, skipped: 0, errors: [{ row: 1, code: 'EMPTY_FILE', message: 'No data rows found.' }] };
       }
-      throw err;
+      const headers = lines[0].split(',').map((h) => h.trim());
+      let created = 0;
+      for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split(',').map((c) => c.trim());
+        const rowData: Record<string, unknown> = {};
+        headers.forEach((h, idx) => {
+          if (cols[idx]) rowData[h] = cols[idx];
+        });
+        mockStorage.records.push({
+          id: crypto.randomUUID(),
+          crm_id: crmId,
+          entity_name: entityName,
+          data: rowData,
+          source: 'CSV',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+        created++;
+      }
+      return {
+        created,
+        skipped: 0,
+        errors: [],
+      };
     }
+    const formData = new FormData();
+    formData.append('file', file);
+    return await request<ImportResult>(
+      `/crm/${crmId}/records/${entityName}/import`,
+      {
+        method: 'POST',
+        body: formData,
+      }
+    );
   },
 
   // 10. List Workflows
   async listWorkflows(crmId: string): Promise<WorkflowData[]> {
-    try {
-      const res = await request<{ items: WorkflowData[] }>(`/crm/${crmId}/workflows`, {
-        method: 'GET',
-      });
-      return res.items || [];
-    } catch (err) {
-      if (getUseMockMode() || (err instanceof Error && err.message.includes('Failed to connect'))) {
-        await new Promise((r) => setTimeout(r, 200));
-        return mockStorage.workflows;
-      }
-      throw err;
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 200));
+      return mockStorage.workflows;
     }
+    const res = await request<{ items: WorkflowData[] }>(`/crm/${crmId}/workflows`, {
+      method: 'GET',
+    });
+    return res.items || [];
   },
 
   // 11. Create Workflow
@@ -488,87 +448,75 @@ export const api = {
     crmId: string,
     payload: CreateWorkflowPayload
   ): Promise<WorkflowData> {
-    try {
-      return await request<WorkflowData>(`/crm/${crmId}/workflows`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-    } catch (err) {
-      if (getUseMockMode() || (err instanceof Error && err.message.includes('Failed to connect'))) {
-        await new Promise((r) => setTimeout(r, 400));
-        const newWorkflow: WorkflowData = {
-          workflow_id: crypto.randomUUID(),
-          status: payload.enabled ? 'active' : 'draft',
-          name: payload.name,
-          trigger: payload.trigger,
-          actions: payload.actions,
-        };
-        mockStorage.workflows.push(newWorkflow);
-        return newWorkflow;
-      }
-      throw err;
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 400));
+      const newWorkflow: WorkflowData = {
+        workflow_id: crypto.randomUUID(),
+        status: payload.enabled ? 'active' : 'draft',
+        name: payload.name,
+        trigger: payload.trigger,
+        actions: payload.actions,
+      };
+      mockStorage.workflows.push(newWorkflow);
+      return newWorkflow;
     }
+    return await request<WorkflowData>(`/crm/${crmId}/workflows`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   },
 
   // 12. Analytics
   async getAnalytics(crmId: string): Promise<AnalyticsData> {
-    try {
-      return await request<AnalyticsData>(`/crm/${crmId}/analytics`, {
-        method: 'GET',
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 300));
+      // Compute live mock stats from current records
+      const leads = mockStorage.records.filter((r) => r.crm_id === crmId);
+      const stageCounts: Record<string, number> = {};
+      const sourceCounts: Record<string, number> = {};
+      let qualified = 0;
+      let won = 0;
+
+      leads.forEach((l) => {
+        const st = String(l.data['status'] || 'New');
+        stageCounts[st] = (stageCounts[st] || 0) + 1;
+        if (st.toLowerCase().includes('qualif')) qualified++;
+        if (st.toLowerCase().includes('won')) won++;
+
+        const src = String(l.data['source'] || 'Website');
+        sourceCounts[src] = (sourceCounts[src] || 0) + 1;
       });
-    } catch (err) {
-      if (getUseMockMode() || (err instanceof Error && err.message.includes('Failed to connect'))) {
-        await new Promise((r) => setTimeout(r, 300));
-        // Compute live mock stats from current records
-        const leads = mockStorage.records.filter((r) => r.crm_id === crmId);
-        const stageCounts: Record<string, number> = {};
-        const sourceCounts: Record<string, number> = {};
-        let qualified = 0;
-        let won = 0;
 
-        leads.forEach((l) => {
-          const st = String(l.data['status'] || 'New');
-          stageCounts[st] = (stageCounts[st] || 0) + 1;
-          if (st.toLowerCase().includes('qualif')) qualified++;
-          if (st.toLowerCase().includes('won')) won++;
-
-          const src = String(l.data['source'] || 'Website');
-          sourceCounts[src] = (sourceCounts[src] || 0) + 1;
-        });
-
-        const total = leads.length || INITIAL_ANALYTICS.total_leads;
-        return {
-          total_leads: total,
-          qualified_leads: qualified || INITIAL_ANALYTICS.qualified_leads,
-          won_leads: won || INITIAL_ANALYTICS.won_leads,
-          conversion_rate: total > 0 ? Number((won / total).toFixed(4)) : 0.0,
-          by_source: Object.keys(sourceCounts).length > 0
-            ? Object.entries(sourceCounts).map(([value, count]) => ({ value, count }))
-            : INITIAL_ANALYTICS.by_source,
-          by_stage: Object.keys(stageCounts).length > 0
-            ? Object.entries(stageCounts).map(([value, count]) => ({ value, count }))
-            : INITIAL_ANALYTICS.by_stage,
-        };
-      }
-      throw err;
+      const total = leads.length || INITIAL_ANALYTICS.total_leads;
+      return {
+        total_leads: total,
+        qualified_leads: qualified || INITIAL_ANALYTICS.qualified_leads,
+        won_leads: won || INITIAL_ANALYTICS.won_leads,
+        conversion_rate: total > 0 ? Number((won / total).toFixed(4)) : 0.0,
+        by_source: Object.keys(sourceCounts).length > 0
+          ? Object.entries(sourceCounts).map(([value, count]) => ({ value, count }))
+          : INITIAL_ANALYTICS.by_source,
+        by_stage: Object.keys(stageCounts).length > 0
+          ? Object.entries(stageCounts).map(([value, count]) => ({ value, count }))
+          : INITIAL_ANALYTICS.by_stage,
+      };
     }
+    return await request<AnalyticsData>(`/crm/${crmId}/analytics`, {
+      method: 'GET',
+    });
   },
 
   // 13. List Evolution Proposals
   async listProposals(crmId: string): Promise<EvolutionProposal[]> {
-    try {
-      const res = await request<{ items: EvolutionProposal[] }>(
-        `/crm/${crmId}/evolution/proposals`,
-        { method: 'GET' }
-      );
-      return res.items || [];
-    } catch (err) {
-      if (getUseMockMode() || (err instanceof Error && err.message.includes('Failed to connect'))) {
-        await new Promise((r) => setTimeout(r, 200));
-        return mockStorage.proposals;
-      }
-      throw err;
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 200));
+      return mockStorage.proposals;
     }
+    const res = await request<{ items: EvolutionProposal[] }>(
+      `/crm/${crmId}/evolution/proposals`,
+      { method: 'GET' }
+    );
+    return res.items || [];
   },
 
   // 14. Create Evolution Proposal
@@ -576,45 +524,41 @@ export const api = {
     crmId: string,
     objective: EvolutionObjective
   ): Promise<EvolutionProposal> {
-    try {
-      return await request<EvolutionProposal>(`/crm/${crmId}/evolution/proposals`, {
-        method: 'POST',
-        body: JSON.stringify({ objective }),
-      });
-    } catch (err) {
-      if (getUseMockMode() || (err instanceof Error && err.message.includes('Failed to connect'))) {
-        await new Promise((r) => setTimeout(r, 700));
-        const firstWf = mockStorage.workflows[0];
-        const newProposal: EvolutionProposal = {
-          proposal_id: crypto.randomUUID(),
-          status: 'pending',
-          summary:
-            objective === 'improve_follow_up'
-              ? 'Shorten initial customer outreach response window to under 12 hours.'
-              : objective === 'improve_conversion'
-              ? 'Add an automated high-priority qualification notification for senior reps.'
-              : 'Auto-assign incoming CSV and web leads to balance team workload.',
-          proposed_change: firstWf
-            ? {
-                type: 'workflow.update',
-                workflow_id: firstWf.workflow_id,
-                delay_hours: 6,
-              }
-            : {
-                type: 'workflow.create',
-                name: 'Auto Lead Routing',
-                trigger: { type: 'record.created', entity: 'lead' },
-                actions: [{ type: 'notify_owner' }],
-              },
-          evidence: [
-            { metric: 'conversion_velocity', observation: 'Fast response leads close 40% faster' },
-          ],
-        };
-        mockStorage.proposals.unshift(newProposal);
-        return newProposal;
-      }
-      throw err;
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 700));
+      const firstWf = mockStorage.workflows[0];
+      const newProposal: EvolutionProposal = {
+        proposal_id: crypto.randomUUID(),
+        status: 'pending',
+        summary:
+          objective === 'improve_follow_up'
+            ? 'Shorten initial customer outreach response window to under 12 hours.'
+            : objective === 'improve_conversion'
+            ? 'Add an automated high-priority qualification notification for senior reps.'
+            : 'Auto-assign incoming CSV and web leads to balance team workload.',
+        proposed_change: firstWf
+          ? {
+              type: 'workflow.update',
+              workflow_id: firstWf.workflow_id,
+              delay_hours: 6,
+            }
+          : {
+              type: 'workflow.create',
+              name: 'Auto Lead Routing',
+              trigger: { type: 'record.created', entity: 'lead' },
+              actions: [{ type: 'notify_owner' }],
+            },
+        evidence: [
+          { metric: 'conversion_velocity', observation: 'Fast response leads close 40% faster' },
+        ],
+      };
+      mockStorage.proposals.unshift(newProposal);
+      return newProposal;
     }
+    return await request<EvolutionProposal>(`/crm/${crmId}/evolution/proposals`, {
+      method: 'POST',
+      body: JSON.stringify({ objective }),
+    });
   },
 
   // 15. Approve Proposal (Stage 1)
@@ -623,32 +567,28 @@ export const api = {
     proposalId: string,
     expectedVersion?: number
   ): Promise<EvolutionProposal> {
-    try {
-      return await request<EvolutionProposal>(
-        `/crm/${crmId}/evolution/proposals/${proposalId}/approve`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            expected_status: 'pending',
-            expected_version: expectedVersion,
-          }),
-        }
-      );
-    } catch (err) {
-      if (getUseMockMode() || (err instanceof Error && err.message.includes('Failed to connect'))) {
-        await new Promise((r) => setTimeout(r, 300));
-        const idx = mockStorage.proposals.findIndex((p) => p.proposal_id === proposalId);
-        if (idx === -1) throw new Error('Proposal not found');
-        mockStorage.proposals[idx] = {
-          ...mockStorage.proposals[idx],
-          status: 'approved',
-          approved_at: new Date().toISOString(),
-          approved_by: '00000000-0000-0000-0000-000000000000',
-        };
-        return mockStorage.proposals[idx];
-      }
-      throw err;
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 300));
+      const idx = mockStorage.proposals.findIndex((p) => p.proposal_id === proposalId);
+      if (idx === -1) throw new Error('Proposal not found');
+      mockStorage.proposals[idx] = {
+        ...mockStorage.proposals[idx],
+        status: 'approved',
+        approved_at: new Date().toISOString(),
+        approved_by: '00000000-0000-0000-0000-000000000000',
+      };
+      return mockStorage.proposals[idx];
     }
+    return await request<EvolutionProposal>(
+      `/crm/${crmId}/evolution/proposals/${proposalId}/approve`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          expected_status: 'pending',
+          expected_version: expectedVersion,
+        }),
+      }
+    );
   },
 
   // 16. Apply Proposal (Stage 2)
@@ -656,47 +596,43 @@ export const api = {
     crmId: string,
     proposalId: string
   ): Promise<EvolutionProposal> {
-    try {
-      return await request<EvolutionProposal>(
-        `/crm/${crmId}/evolution/proposals/${proposalId}/apply`,
-        {
-          method: 'POST',
-          body: JSON.stringify({}),
-        }
-      );
-    } catch (err) {
-      if (getUseMockMode() || (err instanceof Error && err.message.includes('Failed to connect'))) {
-        await new Promise((r) => setTimeout(r, 450));
-        const idx = mockStorage.proposals.findIndex((p) => p.proposal_id === proposalId);
-        if (idx === -1) throw new Error('Proposal not found');
-        const p = mockStorage.proposals[idx];
-        if (p.status !== 'approved') {
-          throw new Error(`Proposal is '${p.status}', not approved.`);
-        }
-        // Increment CRM configuration version
-        const crmIdx = mockStorage.crms.findIndex((c) => c.crm_id === crmId);
-        if (crmIdx !== -1) {
-          mockStorage.crms[crmIdx].configuration_version += 1;
-        }
-        // Update workflow if workflow.update
-        if (p.proposed_change.type === 'workflow.update' && p.proposed_change.workflow_id) {
-          const wfIdx = mockStorage.workflows.findIndex(
-            (w) => w.workflow_id === p.proposed_change.workflow_id
-          );
-          if (wfIdx !== -1 && p.proposed_change.delay_hours !== undefined) {
-            mockStorage.workflows[wfIdx].actions[0].delay_hours = p.proposed_change.delay_hours;
-          }
-        }
-        mockStorage.proposals[idx] = {
-          ...p,
-          status: 'applied',
-          applied_at: new Date().toISOString(),
-          applied_by: '00000000-0000-0000-0000-000000000000',
-        };
-        return mockStorage.proposals[idx];
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 450));
+      const idx = mockStorage.proposals.findIndex((p) => p.proposal_id === proposalId);
+      if (idx === -1) throw new Error('Proposal not found');
+      const p = mockStorage.proposals[idx];
+      if (p.status !== 'approved') {
+        throw new Error(`Proposal is '${p.status}', not approved.`);
       }
-      throw err;
+      // Increment CRM configuration version
+      const crmIdx = mockStorage.crms.findIndex((c) => c.crm_id === crmId);
+      if (crmIdx !== -1) {
+        mockStorage.crms[crmIdx].configuration_version += 1;
+      }
+      // Update workflow if workflow.update
+      if (p.proposed_change.type === 'workflow.update' && p.proposed_change.workflow_id) {
+        const wfIdx = mockStorage.workflows.findIndex(
+          (w) => w.workflow_id === p.proposed_change.workflow_id
+        );
+        if (wfIdx !== -1 && p.proposed_change.delay_hours !== undefined) {
+          mockStorage.workflows[wfIdx].actions[0].delay_hours = p.proposed_change.delay_hours;
+        }
+      }
+      mockStorage.proposals[idx] = {
+        ...p,
+        status: 'applied',
+        applied_at: new Date().toISOString(),
+        applied_by: '00000000-0000-0000-0000-000000000000',
+      };
+      return mockStorage.proposals[idx];
     }
+    return await request<EvolutionProposal>(
+      `/crm/${crmId}/evolution/proposals/${proposalId}/apply`,
+      {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }
+    );
   },
 
   // 17. Reject Proposal
@@ -705,29 +641,25 @@ export const api = {
     proposalId: string,
     reason: string
   ): Promise<EvolutionProposal> {
-    try {
-      return await request<EvolutionProposal>(
-        `/crm/${crmId}/evolution/proposals/${proposalId}/reject`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ reason }),
-        }
-      );
-    } catch (err) {
-      if (getUseMockMode() || (err instanceof Error && err.message.includes('Failed to connect'))) {
-        await new Promise((r) => setTimeout(r, 300));
-        const idx = mockStorage.proposals.findIndex((p) => p.proposal_id === proposalId);
-        if (idx === -1) throw new Error('Proposal not found');
-        mockStorage.proposals[idx] = {
-          ...mockStorage.proposals[idx],
-          status: 'rejected',
-          rejection_reason: reason,
-          rejected_at: new Date().toISOString(),
-          rejected_by: '00000000-0000-0000-0000-000000000000',
-        };
-        return mockStorage.proposals[idx];
-      }
-      throw err;
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 300));
+      const idx = mockStorage.proposals.findIndex((p) => p.proposal_id === proposalId);
+      if (idx === -1) throw new Error('Proposal not found');
+      mockStorage.proposals[idx] = {
+        ...mockStorage.proposals[idx],
+        status: 'rejected',
+        rejection_reason: reason,
+        rejected_at: new Date().toISOString(),
+        rejected_by: '00000000-0000-0000-0000-000000000000',
+      };
+      return mockStorage.proposals[idx];
     }
+    return await request<EvolutionProposal>(
+      `/crm/${crmId}/evolution/proposals/${proposalId}/reject`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      }
+    );
   },
 };
