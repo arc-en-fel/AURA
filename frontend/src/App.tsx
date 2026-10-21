@@ -13,6 +13,7 @@ import { DashboardPage } from '@/features/dashboard/DashboardPage';
 import { CRMListPage } from '@/features/crms/CRMListPage';
 import { CRMDetailPage } from '@/features/crms/CRMDetailPage';
 import { CRMGeneratorPage } from '@/features/crm-generator/CRMGeneratorPage';
+import { CRMChatPage } from '@/features/crm-chat/CRMChatPage';
 import { RecordsPage } from '@/features/records/RecordsPage';
 import { WorkflowsPage } from '@/features/workflows/WorkflowsPage';
 import { AnalyticsPage } from '@/features/analytics/AnalyticsPage';
@@ -40,6 +41,7 @@ export const App: React.FC = () => {
                   <Route path="/crms" element={<CRMListPage />} />
                   <Route path="/crms/:crmId" element={<CRMDetailPage />} />
                   <Route path="/create-crm" element={<CRMGeneratorPage />} />
+                  <Route path="/chat-crm" element={<CRMChatPage />} />
                   <Route path="/records" element={<RecordsPage />} />
                   <Route path="/workflows" element={<WorkflowsPage />} />
                   <Route path="/analytics" element={<AnalyticsPage />} />

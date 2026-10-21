@@ -662,4 +662,64 @@ export const api = {
       }
     );
   },
+
+  // 18. CRM Chat — send a message and receive next question or readiness signal
+  async chatCRM(messages: { role: 'user' | 'assistant'; content: string }[], generateNow = false): Promise<{
+    reply?: string;
+    ready_to_generate?: boolean;
+    fallback_used?: boolean;
+    configuration?: import('@/types/crm').CRMConfiguration;
+    warnings?: string[];
+  }> {
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 700));
+      const userCount = messages.filter((m) => m.role === 'user').length;
+      if (generateNow) {
+        const userText = messages.filter((m) => m.role === 'user').map((m) => m.content).join(' ');
+        const isHealthcare = userText.toLowerCase().includes('health') || userText.toLowerCase().includes('clinic');
+        const isRealEstate = userText.toLowerCase().includes('real estate') || userText.toLowerCase().includes('property');
+        const industry = isHealthcare ? 'healthcare' : isRealEstate ? 'real_estate' : 'general_sales';
+        return {
+          configuration: {
+            schema_version: '1.0',
+            name: `${industry.replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase())} CRM`,
+            industry,
+            entities: [{
+              name: 'lead', label: 'Lead',
+              fields: [
+                { name: 'full_name', label: 'Full Name', type: 'text', required: true },
+                { name: 'email', label: 'Email', type: 'email', required: true },
+                { name: 'status', label: 'Status', type: 'select', required: true, options: ['New', 'Active', 'Won', 'Lost'] },
+              ],
+            }],
+            pipeline_stages: ['New', 'Active', 'Won', 'Lost'],
+          },
+          warnings: ['Mock mode: CRM generated from conversation summary.'],
+        };
+      }
+      const mockQuestions = [
+        "What kind of business is this CRM for — real estate, healthcare, sales, or something else?",
+        "What are the main things you need to track — leads, clients, deals, appointments?",
+        "How many stages does your typical process have? For example: New → Contacted → Won.",
+        "What's the most important field you need on each record?",
+      ];
+      const idx = Math.min(userCount - 1, mockQuestions.length - 1);
+      const ready = userCount >= mockQuestions.length;
+      return {
+        reply: ready ? "I have everything I need! Click 'Generate My CRM' to create your custom CRM." : mockQuestions[idx],
+        ready_to_generate: ready,
+        fallback_used: true,
+      };
+    }
+    return await request<{
+      reply?: string;
+      ready_to_generate?: boolean;
+      fallback_used?: boolean;
+      configuration?: import('@/types/crm').CRMConfiguration;
+      warnings?: string[];
+    }>('/crm/chat', {
+      method: 'POST',
+      body: JSON.stringify({ messages, generate_now: generateNow }),
+    });
+  },
 };

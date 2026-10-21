@@ -791,3 +791,123 @@ def test_apply_db_returns_invalid_change_maps_to_422(mock_get_repo):
     data = response.json()
     assert data["error"]["code"] == "VALIDATION_ERROR"
 
+
+# ── Phase 6 additions: analytics wiring and warning isolation ───────
+
+
+@patch("app.routers.evolution._get_repo")
+def test_create_proposal_passes_real_analytics_to_provider(mock_get_repo):
+    """Real analytics (total, won, conversion_rate) must reach the provider."""
+    repo = MagicMock()
+    mock_get_repo.return_value = repo
+
+    # Use a CRM that has a status select field so won_leads can be computed
+    crm_with_status = _mock_crm()
+    crm_with_status["configuration"]["entities"][0]["fields"].append(
+        {"name": "status", "label": "Status", "type": "select", "required": True,
+         "options": ["New", "Won", "Lost"]}
+    )
+    repo.get_crm.return_value = crm_with_status
+
+    # Simulate 20 total leads, 4 won (conversion_rate = 0.20)
+    repo.count_records.return_value = 20
+    repo.count_records_by_field.return_value = [
+        {"value": "Won", "count": 4},
+        {"value": "New", "count": 16},
+    ]
+
+    captured_analytics: dict = {}
+
+    def capture_proposal(objective, crm_config, analytics):
+        captured_analytics.update(analytics)
+        return {
+            "summary": "Test proposal",
+            "proposed_change": {
+                "type": "workflow.create",
+                "name": "test",
+                "trigger": {"type": "record.created", "entity": "lead"},
+                "actions": [{"type": "create_follow_up_task", "delay_hours": 4}],
+            },
+            "evidence": [],
+        }
+
+    with patch("app.routers.evolution.get_ai_provider") as mock_factory:
+        mock_provider = MagicMock()
+        mock_provider.generate_evolution_proposal.side_effect = capture_proposal
+        mock_factory.return_value = mock_provider
+        repo.create_proposal.return_value = _mock_proposal_wf_create(status="pending")
+
+        response = client.post(
+            f"/api/v1/crm/{CRM_ID}/evolution/proposals",
+            json={"objective": "improve_conversion"},
+            headers=auth_headers(USER_A_ID),
+        )
+
+    assert response.status_code == 201
+    assert captured_analytics["total_leads"] == 20
+    assert captured_analytics["won_leads"] == 4
+    assert captured_analytics["conversion_rate"] == 0.2
+
+
+@patch("app.routers.evolution._get_repo")
+def test_create_proposal_succeeds_when_analytics_db_fails(mock_get_repo):
+    """A DB error computing analytics must not block proposal creation — falls back to zeros."""
+    repo = MagicMock()
+    mock_get_repo.return_value = repo
+    repo.get_crm.return_value = _mock_crm()
+
+    # Simulate analytics DB failure
+    repo.count_records.side_effect = RuntimeError("DB timeout")
+
+    captured_analytics: dict = {}
+
+    def capture_proposal(objective, crm_config, analytics):
+        captured_analytics.update(analytics)
+        return {
+            "summary": "Fallback proposal",
+            "proposed_change": {
+                "type": "workflow.create",
+                "name": "fallback",
+                "trigger": {"type": "record.created", "entity": "lead"},
+                "actions": [{"type": "create_follow_up_task", "delay_hours": 4}],
+            },
+            "evidence": [],
+        }
+
+    with patch("app.routers.evolution.get_ai_provider") as mock_factory:
+        mock_provider = MagicMock()
+        mock_provider.generate_evolution_proposal.side_effect = capture_proposal
+        mock_factory.return_value = mock_provider
+        repo.create_proposal.return_value = _mock_proposal_wf_create(status="pending")
+
+        response = client.post(
+            f"/api/v1/crm/{CRM_ID}/evolution/proposals",
+            json={"objective": "improve_follow_up"},
+            headers=auth_headers(USER_A_ID),
+        )
+
+    assert response.status_code == 201
+    # Graceful fallback: provider still gets called with zeros
+    assert captured_analytics["total_leads"] == 0
+    assert captured_analytics["conversion_rate"] == 0.0
+
+
+def test_evolution_proposal_generate_clears_last_warnings():
+    """generate_evolution_proposal must clear last_warnings so stale CRM-generation
+    warnings do not leak into the evolution response context."""
+    from app.services.ollama_provider import OllamaAIProvider
+    from app.services.laya_system1 import LayaSystem1
+
+    provider = OllamaAIProvider(enable_fallback=True)
+
+    # Simulate a prior CRM generation that set a fallback warning
+    provider.last_warnings = ["AI provider fallback: stale warning from crm/generate"]
+
+    crm_config = LayaSystem1.generate_scaffold_config("Create a SaaS CRM")
+    provider.generate_evolution_proposal("improve_follow_up", crm_config, {})
+
+    # Warnings must be cleared after evolution proposal generation
+    assert provider.last_warnings == [], (
+        "last_warnings must be empty after generate_evolution_proposal; "
+        "stale warnings from a prior crm/generate call must not persist."
+    )

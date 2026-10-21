@@ -29,13 +29,14 @@ def _extract_bearer_token(request: Request) -> str:
 def _verify_jwt(token: str, settings: Settings) -> str:
     """Verify Supabase JWT and return user_id (sub claim).
 
-    1. If `supabase_jwt_secret` is configured, verifies locally with HS256.
-    2. Otherwise, verifies against Supabase Auth via GoTrue (`client.auth.get_user(token)`).
+    1. If `supabase_jwt_secret` is configured, tries HS256 local verification.
+    2. Falls back to Supabase GoTrue (`client.auth.get_user(token)`) which
+       handles both HS256 and ES256 tokens transparently.
     3. Never bypasses authentication; always extracts and validates user UUID.
     """
     user_id: str | None = None
 
-    # Strategy 1: Local JWT verification via configured secret
+    # Strategy 1: Local JWT verification via configured secret (HS256 legacy tokens)
     if settings.supabase_jwt_secret:
         try:
             payload = jwt.decode(
@@ -48,7 +49,8 @@ def _verify_jwt(token: str, settings: Settings) -> str:
         except JWTError:
             user_id = None
 
-    # Strategy 2: Supabase GoTrue Auth verification
+    # Strategy 2: Supabase GoTrue Auth verification (handles ES256 and HS256)
+    # Always attempted when local verification fails or produces no user_id.
     if not user_id:
         if settings.supabase_url and settings.supabase_anon_key and settings.supabase_anon_key != "mock-anon-key":
             try:

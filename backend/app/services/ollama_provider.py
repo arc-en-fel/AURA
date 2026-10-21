@@ -36,7 +36,7 @@ class OllamaAIProvider(AIProvider):
         self,
         base_url: str = "http://localhost:11434",
         model: str = "qwen3:4b",
-        timeout: float = 12.0,
+        timeout: float = 120.0,
         enable_fallback: bool = True,
         decision_engine: LayaDecisionEngine | None = None,
     ) -> None:
@@ -98,6 +98,7 @@ class OllamaAIProvider(AIProvider):
             "prompt": f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n",
             "format": "json",
             "stream": False,
+            "think": False,
             "options": {
                 "temperature": 0.2,
                 "top_p": 0.9,
@@ -254,4 +255,7 @@ class OllamaAIProvider(AIProvider):
         proposal = LayaSystem1.generate_scaffold_proposal(objective, crm_config, analytics)
         # Validate proposed change
         ProposedChange(**proposal["proposed_change"])
+        # Clear any stale CRM-generation warning so it cannot leak into the
+        # evolution response for a request that reuses the same async context.
+        self.last_warnings = []
         return proposal

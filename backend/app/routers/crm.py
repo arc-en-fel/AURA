@@ -48,9 +48,11 @@ async def generate_crm(
         config_dict = provider.generate_crm_config(body.prompt)
         # Validate with Pydantic
         config = CRMConfiguration(**config_dict)
+        # Forward any provider warnings (e.g. fallback indicator) to the caller
+        warnings = list(getattr(provider, "last_warnings", []))
         return success_response({
             "configuration": config.model_dump(),
-            "warnings": [],
+            "warnings": warnings,
         })
     except ValidationError as exc:
         return error_response(422, "VALIDATION_ERROR", "Generated configuration failed validation.", [

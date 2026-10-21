@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.routers import crm, records, workflows, evolution
+from app.routers import crm, records, workflows, evolution, chat, copilot
 from app.routers.responses import success_response, error_response
 
 import uuid
@@ -42,6 +42,8 @@ def create_app() -> FastAPI:
     app.include_router(records.router, prefix=api_prefix)
     app.include_router(workflows.router, prefix=api_prefix)
     app.include_router(evolution.router, prefix=api_prefix)
+    app.include_router(chat.router, prefix=api_prefix)
+    app.include_router(copilot.router, prefix=api_prefix)
 
     def _health_payload() -> dict[str, str]:
         return {

@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Bot,
   Layers,
+  MessageCircle,
 } from 'lucide-react';
 import { useCRM } from '@/context/CRMContext';
 import { AIAssistantDrawer } from '@/features/ai-assistant/AIAssistantDrawer';
@@ -31,6 +32,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onCloseMobile })
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
     { name: 'My CRMs', path: '/crms', icon: FolderKanban },
     { name: 'Create CRM', path: '/create-crm', icon: Sparkles, highlight: true },
+    { name: 'Chat & Build CRM', path: '/chat-crm', icon: MessageCircle, highlight: true },
     { name: 'Records', path: '/records', icon: Database },
     { name: 'Workflows', path: '/workflows', icon: GitBranch },
     { name: 'Analytics', path: '/analytics', icon: BarChart3 },
