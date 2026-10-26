@@ -3,7 +3,6 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
   FolderKanban,
-  Sparkles,
   Database,
   GitBranch,
   BarChart3,
@@ -14,6 +13,7 @@ import {
   Bot,
   Layers,
   MessageCircle,
+  Sparkles,
 } from 'lucide-react';
 import { useCRM } from '@/context/CRMContext';
 import { AIAssistantDrawer } from '@/features/ai-assistant/AIAssistantDrawer';
@@ -31,8 +31,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onCloseMobile })
   const navItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
     { name: 'My CRMs', path: '/crms', icon: FolderKanban },
-    { name: 'Create CRM', path: '/create-crm', icon: Sparkles, highlight: true },
-    { name: 'Chat & Build CRM', path: '/chat-crm', icon: MessageCircle, highlight: true },
+    { name: 'Build a CRM', path: '/chat-crm', icon: MessageCircle, highlight: true },
     { name: 'Records', path: '/records', icon: Database },
     { name: 'Workflows', path: '/workflows', icon: GitBranch },
     { name: 'Analytics', path: '/analytics', icon: BarChart3 },

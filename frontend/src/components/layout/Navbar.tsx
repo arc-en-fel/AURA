@@ -21,7 +21,8 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenMobile }) => {
     const path = location.pathname;
     if (path === '/dashboard') return 'Dashboard';
     if (path === '/crms') return 'My CRMs';
-    if (path === '/create-crm') return 'Generate & Create CRM';
+    if (path === '/chat-crm') return 'Build a CRM';
+    if (path === '/create-crm') return 'Build a CRM'; // legacy redirect safety
     if (path === '/records') return 'Dynamic Records';
     if (path === '/workflows') return 'Workflows & Automation';
     if (path === '/analytics') return 'Analytics & Funnel';
@@ -95,10 +96,10 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenMobile }) => {
                 </div>
                 <div className="border-t border-slate-100 pt-1 mt-1">
                   <button
-                    onClick={() => navigate('/create-crm')}
+                    onClick={() => navigate('/chat-crm')}
                     className="w-full text-left px-3 py-2 text-xs font-semibold text-aura-cyan hover:bg-cyan-50 flex items-center gap-2"
                   >
-                    + Generate New CRM
+                    + Build New CRM
                   </button>
                 </div>
               </div>

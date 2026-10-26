@@ -664,7 +664,11 @@ export const api = {
   },
 
   // 18. CRM Chat — send a message and receive next question or readiness signal
-  async chatCRM(messages: { role: 'user' | 'assistant'; content: string }[], generateNow = false): Promise<{
+  async chatCRM(
+    messages: { role: 'user' | 'assistant'; content: string }[],
+    generateNow = false,
+    crmType?: string
+  ): Promise<{
     reply?: string;
     ready_to_generate?: boolean;
     fallback_used?: boolean;
@@ -678,12 +682,12 @@ export const api = {
         const userText = messages.filter((m) => m.role === 'user').map((m) => m.content).join(' ');
         const isHealthcare = userText.toLowerCase().includes('health') || userText.toLowerCase().includes('clinic');
         const isRealEstate = userText.toLowerCase().includes('real estate') || userText.toLowerCase().includes('property');
-        const industry = isHealthcare ? 'healthcare' : isRealEstate ? 'real_estate' : 'general_sales';
+        const industrySeed = crmType || (isHealthcare ? 'healthcare' : isRealEstate ? 'real_estate' : 'general_sales');
         return {
           configuration: {
             schema_version: '1.0',
-            name: `${industry.replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase())} CRM`,
-            industry,
+            name: `${industrySeed.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())} CRM`,
+            industry: industrySeed,
             entities: [{
               name: 'lead', label: 'Lead',
               fields: [
@@ -698,10 +702,10 @@ export const api = {
         };
       }
       const mockQuestions = [
-        "What kind of business is this CRM for — real estate, healthcare, sales, or something else?",
         "What are the main things you need to track — leads, clients, deals, appointments?",
         "How many stages does your typical process have? For example: New → Contacted → Won.",
         "What's the most important field you need on each record?",
+        "What size is your team — solo, small (2–10), or larger?",
       ];
       const idx = Math.min(userCount - 1, mockQuestions.length - 1);
       const ready = userCount >= mockQuestions.length;
@@ -719,7 +723,43 @@ export const api = {
       warnings?: string[];
     }>('/crm/chat', {
       method: 'POST',
-      body: JSON.stringify({ messages, generate_now: generateNow }),
+      body: JSON.stringify({ messages, generate_now: generateNow, crm_type: crmType ?? null }),
     });
+  },
+
+  // 19. Co-pilot chat — CRM-aware conversational assistant
+  async copilotChat(
+    messages: { role: 'user' | 'assistant'; content: string }[],
+    crmId?: string | null,
+  ): Promise<{
+    reply: string;
+    nav_route?: string | null;
+    nav_label?: string | null;
+    fallback?: boolean;
+  }> {
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 700));
+      const q = (messages[messages.length - 1]?.content ?? '').toLowerCase();
+      if (q.includes('evolution') || q.includes('improve') || q.includes('proposal')) {
+        return { reply: 'To propose improvements, use the Evolution Center. AURA will generate an AI-powered change proposal for your review.', nav_route: '/evolution', nav_label: 'Go to Evolution Center', fallback: true };
+      }
+      if (q.includes('workflow') || q.includes('automation')) {
+        return { reply: 'Workflows fire automatically when a record event occurs. You can view and manage them on the Workflows page.', nav_route: '/workflows', nav_label: 'View Workflows', fallback: true };
+      }
+      if (q.includes('record') || q.includes('lead') || q.includes('import')) {
+        return { reply: 'Records are stored dynamically using your CRM schema. You can create, edit, and import them on the Records page.', nav_route: '/records', nav_label: 'Open Records', fallback: true };
+      }
+      if (q.includes('analytics') || q.includes('conversion') || q.includes('metric')) {
+        return { reply: 'AURA tracks total leads, conversion rate, and pipeline stage breakdowns on the Analytics page.', nav_route: '/analytics', nav_label: 'View Analytics', fallback: true };
+      }
+      return { reply: "I can help with questions about your CRM configuration, records, workflows, analytics, and evolution proposals. What would you like to know?", nav_route: null, nav_label: null, fallback: true };
+    }
+    return await request<{ reply: string; nav_route?: string | null; nav_label?: string | null; fallback?: boolean }>(
+      '/copilot/chat',
+      {
+        method: 'POST',
+        body: JSON.stringify({ messages, crm_id: crmId ?? null }),
+      },
+    );
   },
 };

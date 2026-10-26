@@ -53,10 +53,10 @@ export const DashboardPage: React.FC = () => {
           <div className="flex flex-wrap items-center gap-3">
             <Button
               variant="yellow"
-              onClick={() => navigate('/create-crm')}
+              onClick={() => navigate('/chat-crm')}
               leftIcon={<Sparkles className="w-4 h-4" />}
             >
-              Generate New CRM
+              Build New CRM
             </Button>
             {activeCRM && (
               <Button
@@ -144,8 +144,8 @@ export const DashboardPage: React.FC = () => {
           icon={<Layers className="w-6 h-6" />}
           title="No CRMs Created Yet"
           description="AURA lets you create a tailor-made CRM architecture in seconds using natural language prompts."
-          actionLabel="Generate Your First CRM"
-          onAction={() => navigate('/create-crm')}
+          actionLabel="Build Your First CRM"
+          onAction={() => navigate('/chat-crm')}
         />
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

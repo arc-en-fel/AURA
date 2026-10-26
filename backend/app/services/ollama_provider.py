@@ -1,4 +1,4 @@
-"""Ollama AI provider implementation for Qwen3-4B local generative intelligence.
+"""Ollama AI provider implementation for local Qwen generative intelligence.
 
 Integrates with local Ollama daemon and Laya System 1 structured decision intelligence
 to produce schema-valid CRM configurations and evolution proposals.
@@ -35,13 +35,13 @@ class OllamaAIProvider(AIProvider):
     def __init__(
         self,
         base_url: str = "http://localhost:11434",
-        model: str = "qwen3:4b",
+        model: str = "qwen2.5:3b",
         timeout: float = 120.0,
         enable_fallback: bool = True,
         decision_engine: LayaDecisionEngine | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.model = model or "qwen3:4b"
+        self.model = model or "qwen2.5:3b"
         self.timeout = timeout
         self.enable_fallback = enable_fallback
         self.decision_engine = decision_engine
@@ -110,17 +110,19 @@ class OllamaAIProvider(AIProvider):
         endpoint = f"{self.base_url}/api/generate"
         payload = self._get_payload(system_prompt, user_prompt)
 
+        # TEMP-DIAG: capture full Build-CRM draft-generation requests and responses.
+        logger.warning("[TEMP-DIAG][BUILD-CRM] ollama_payload endpoint=%s payload=%s",
+                       endpoint, json.dumps(payload, default=str))
+
         try:
             with httpx.Client(timeout=self.timeout) as client:
                 resp = client.post(endpoint, json=payload)
                 if resp.status_code == 200:
                     data = resp.json()
-                    return data.get("response", "")
-                logger.warning(
-                    "Ollama returned non-200 status: %d %s",
-                    resp.status_code,
-                    resp.text[:200],
-                )
+                    logger.warning("[TEMP-DIAG][BUILD-CRM] ollama_raw_response=%s", json.dumps(data, default=str))
+                    return data.get("response", "") or None
+                logger.warning("[TEMP-DIAG][BUILD-CRM] ollama_http_error status=%d body=%s",
+                               resp.status_code, resp.text)
         except Exception as exc:
             logger.info("Ollama call failed or timed out (%s). Using Laya System 1 fallback.", exc)
 
@@ -131,6 +133,10 @@ class OllamaAIProvider(AIProvider):
         endpoint = f"{self.base_url}/api/generate"
         payload = self._get_payload(system_prompt, user_prompt)
 
+        # TEMP-DIAG: capture full Build-CRM draft-generation requests and responses.
+        logger.warning("[TEMP-DIAG][BUILD-CRM] ollama_payload endpoint=%s payload=%s",
+                       endpoint, json.dumps(payload, default=str))
+
         try:
             async with _async_generation_semaphore:
                 # The context manager deterministically closes the HTTP client
@@ -139,12 +145,10 @@ class OllamaAIProvider(AIProvider):
                     resp = await client.post(endpoint, json=payload)
                     if resp.status_code == 200:
                         data = resp.json()
-                        return data.get("response", "")
-                    logger.warning(
-                        "Ollama async returned non-200 status: %d %s",
-                        resp.status_code,
-                        resp.text[:200],
-                    )
+                        logger.warning("[TEMP-DIAG][BUILD-CRM] ollama_raw_response=%s", json.dumps(data, default=str))
+                        return data.get("response", "") or None
+                    logger.warning("[TEMP-DIAG][BUILD-CRM] ollama_http_error status=%d body=%s",
+                                   resp.status_code, resp.text)
         except httpx.TimeoutException as exc:
             logger.info("Ollama async call timed out (%s). Using deterministic fallback.", exc)
         except httpx.RequestError as exc:

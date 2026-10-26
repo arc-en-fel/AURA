@@ -38,10 +38,10 @@ export const CRMListPage: React.FC = () => {
 
         <Button
           variant="primary"
-          onClick={() => navigate('/create-crm')}
+          onClick={() => navigate('/chat-crm')}
           leftIcon={<Sparkles className="w-4 h-4 text-aura-cyan" />}
         >
-          Generate New CRM
+          Build New CRM
         </Button>
       </div>
 
@@ -78,7 +78,7 @@ export const CRMListPage: React.FC = () => {
               : 'Generate your first CRM architecture using natural-language AI prompts.'
           }
           actionLabel="Generate CRM"
-          onAction={() => navigate('/create-crm')}
+          onAction={() => navigate('/chat-crm')}
         />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
