@@ -1,4 +1,4 @@
-"""Optional standalone smoke test script for live Ollama & Qwen3-4B verification.
+"""Optional standalone smoke test script for live Ollama & Qwen 2.5 3B verification.
 
 Usage:
     python backend/scripts/smoke_test_ollama.py
@@ -21,15 +21,15 @@ def main():
         print(f"[+] Ollama service is ONLINE.")
         print(f"[+] Available models on disk: {models if models else 'None'}")
 
-        target_model = "qwen3:4b"
+        target_model = "qwen2.5:3b"
         if not any(target_model in m for m in models):
             alt_models = [m for m in models if "qwen" in m or "gemma" in m]
             if alt_models:
                 target_model = alt_models[0]
-                print(f"[*] 'qwen3:4b' not found, testing with available model: '{target_model}'")
+                print(f"[*] 'qwen2.5:3b' not found, testing with available model: '{target_model}'")
             else:
-                print(f"[!] Neither 'qwen3:4b' nor alternative models found in Ollama.")
-                print(f"[*] To pull Qwen: ollama pull qwen2.5:3b (or qwen3:4b)")
+                print(f"[!] Neither 'qwen2.5:3b' nor alternative models found in Ollama.")
+                print(f"[*] To pull Qwen: ollama pull qwen2.5:3b")
                 return
 
         print(f"[*] Generating test CRM configuration using model: {target_model}...")

@@ -296,7 +296,7 @@ def print_config_summary() -> None:
 
     print(f"  LLM_PROVIDER:             {settings.llm_provider}")
     print(f"  LOCAL_LLM_BASE_URL:       {settings.local_llm_base_url}")
-    print(f"  LOCAL_LLM_MODEL:          {settings.local_llm_model or 'qwen3:4b (default)'}")
+    print(f"  LOCAL_LLM_MODEL:          {settings.local_llm_model}")
     print(f"  Configured timeout:       12000ms (hardcoded in OllamaAIProvider)")
     print(f"  Max concurrent requests:  4 (asyncio.BoundedSemaphore)")
     print(f"  Max repair attempts:      1 (MAX_REPAIR_ATTEMPTS)")

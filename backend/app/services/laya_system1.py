@@ -113,6 +113,28 @@ class LayaSystem1:
     """Decision-intelligence and guardrail engine."""
 
     @classmethod
+    def classify_request(cls, prompt: str) -> dict[str, Any]:
+        """Fast deterministic System-1 intent/routing classification."""
+        text = prompt.casefold()
+        if re.search(r"\b(delete|remove|erase)\b", text):
+            intent = "delete_record"
+        elif re.search(r"\b(update|edit|change|modify)\b", text):
+            intent = "update_record"
+        elif re.search(r"\b(add|create|new record)\b", text):
+            intent = "create_record"
+        elif re.search(r"\b(show|list|find|search|which|records?|leads?|contacts?)\b", text):
+            intent = "list_records"
+        else:
+            intent = "conversation"
+        return {
+            "intent": intent,
+            "requires_llm": True,
+            "route": "system2_groq",
+            "mode": "deterministic",
+            "model_loaded": False,
+        }
+
+    @classmethod
     def sanitize_identifier(cls, name: str, fallback_prefix: str = "field") -> str:
         """Convert any human or messy name into a valid lowercase identifier."""
         clean = re.sub(r"[^a-zA-Z0-9_]+", "_", name.strip().lower())

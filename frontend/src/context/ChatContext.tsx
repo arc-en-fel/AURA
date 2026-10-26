@@ -26,6 +26,7 @@ import { useAuth } from './AuthContext';
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
+  response_source?: 'llm' | 'tool_result' | 'rule' | 'fallback' | 'error';
   isLoading?: boolean;
   choices?: string[];
 }
@@ -55,6 +56,7 @@ export interface QuestionSpec {
 
 export const WELCOME_MESSAGE: ChatMessage = {
   role: 'assistant',
+  response_source: 'rule',
   content:
     "Hi! I'm AURA, your AI CRM architect. " +
     'Select a CRM type below or describe your business — ' +

@@ -193,11 +193,14 @@ class MockAIProvider(AIProvider):
             }
 
 
-def get_ai_provider(provider_name: str = "mock") -> AIProvider:
+def get_ai_provider(provider_name: str = "groq") -> AIProvider:
     """Factory function to get the configured AI provider."""
-    normalized = (provider_name or "mock").lower().strip()
+    normalized = (provider_name or "groq").lower().strip()
     if normalized == "mock":
         return MockAIProvider()
+    if normalized == "groq":
+        from app.services.groq_provider import GroqAIProvider
+        return GroqAIProvider()
     if normalized in ("local", "ollama"):
         from app.config import get_settings
         from app.services.laya_runtime import LayaDecisionEngine
@@ -206,8 +209,8 @@ def get_ai_provider(provider_name: str = "mock") -> AIProvider:
         settings = get_settings()
         return OllamaAIProvider(
             base_url=settings.local_llm_base_url,
-            model=settings.local_llm_model or "qwen3:4b",
+            model=settings.local_llm_model,
             enable_fallback=True,
             decision_engine=LayaDecisionEngine(),
         )
-    raise ValueError(f"Unsupported AI provider: {provider_name}. Use 'mock' or 'local' for demos.")
+    raise ValueError(f"Unsupported AI provider: {provider_name}. Use 'groq', 'local', or explicit test-only 'mock'.")
