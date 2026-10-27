@@ -203,6 +203,9 @@ async function request<T>(
   }
 
   if (!response.ok) {
+    console.error('[API ERROR] status:', response.status);
+    console.error('[API ERROR] endpoint:', endpoint);
+    console.error('[API ERROR] response:', json);
     const errorPayload = json as ApiErrorEnvelope;
     const message =
       errorPayload?.error?.message || `Request failed with status ${response.status}`;
@@ -667,7 +670,14 @@ export const api = {
   async chatCRM(
     messages: { role: 'user' | 'assistant'; content: string }[],
     generateNow = false,
-    crmType?: string
+    crmType?: string,
+    questAnswers?: {  // ← NEW: Pass structured answers from questionnaire
+      crm_type?: string;
+      tracks?: string;
+      pipeline_stages?: string;
+      key_fields?: string;
+      team_size?: string;
+    }
   ): Promise<{
     reply?: string;
     ready_to_generate?: boolean;
@@ -715,6 +725,14 @@ export const api = {
         fallback_used: true,
       };
     }
+    const payload = { 
+      messages, 
+      generate_now: generateNow, 
+      crm_type: crmType ?? null,
+      quest_answers: questAnswers ?? {},  // ← NEW: Send structured answers
+    };
+    console.log('[CRM CHAT] Request payload:', JSON.stringify(payload, null, 2));
+    
     return await request<{
       reply?: string;
       ready_to_generate?: boolean;
@@ -723,7 +741,7 @@ export const api = {
       warnings?: string[];
     }>('/crm/chat', {
       method: 'POST',
-      body: JSON.stringify({ messages, generate_now: generateNow, crm_type: crmType ?? null }),
+      body: JSON.stringify(payload),
     });
   },
 

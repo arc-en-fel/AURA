@@ -244,21 +244,6 @@ export const CRMChatPage: React.FC = () => {
     [setMessages, setPendingQuestion, setReadyToGenerate],
   );
 
-  // ── CRM type chip selection ────────────────────────────────────────
-
-  const handleSelectCrmType = (typeId: CrmTypeId) => {
-    if (draftConfig || isSending || isGenerating) return;
-
-    setSelectedCrmType(typeId);
-    const label = CRM_TYPES.find((t) => t.id === typeId)?.label ?? typeId;
-    const userMsg = { role: 'user' as const, content: `I want to build a ${label} CRM.` };
-    setMessages((prev) => [...prev, userMsg]);
-
-    const updated: QuestAnswers = { ...questAnswers, crm_type: typeId };
-    setQuestAnswers(updated);
-    checkAndAdvance(updated, typeId);
-  };
-
   // ── Numbered choice selection ──────────────────────────────────────
 
   const handleSelectChoice = (choice: string) => {
@@ -296,21 +281,14 @@ export const CRMChatPage: React.FC = () => {
 
       const userMsg = { role: 'user' as const, content: trimmed };
 
-      // Build the updated message array synchronously for the AI payload
-      // We cannot rely on `messages` from the closure being current after
-      // state batching, so we derive the payload from the functional updater.
-      let snapshotForPayload: typeof messages = [];
-      setMessages((prev) => {
-        snapshotForPayload = [...prev, userMsg];
-        return snapshotForPayload;
-      });
-
       const key = answerKey ?? pendingQuestion?.key;
       const updatedAnswers: QuestAnswers = key
         ? { ...questAnswers, [key]: trimmed }
         : questAnswers;
 
       if (key) {
+        // Questionnaire answer: update structured answers, then advance
+        setMessages((prev) => [...prev, userMsg]);
         setQuestAnswers(updatedAnswers);
         setPendingQuestion(null);
         // Give React a tick to flush state before checking completeness
@@ -319,19 +297,31 @@ export const CRMChatPage: React.FC = () => {
       }
 
       // Free-form message — send to AI
-      setIsSending(true);
+      // CRITICAL: Build the next messages array explicitly, don't rely on stale state
+      const nextMessages = [...messages, userMsg];
+
+      // Add loading indicator to UI
       setMessages((prev) => [
         ...prev,
+        userMsg,
         { role: 'assistant', content: '', isLoading: true },
       ]);
+      setIsSending(true);
 
       try {
-        // Use the snapshot we captured above; filter out loading placeholders
-        const payload = snapshotForPayload
-          .filter((m) => !m.isLoading)
+        // Construct the payload explicitly from the array we just built
+        const payload = nextMessages
+          .filter((m) => !('isLoading' in m) || !m.isLoading)
           .map((m) => ({ role: m.role, content: m.content }));
 
-        const res = await api.chatCRM(payload, false, selectedCrmType ?? undefined);
+        console.log("[CRM CHAT PAGE] Calling api.chatCRM with:", {
+          payloadMessages: payload,
+          generateNow: false,
+          selectedCrmType,
+          updatedAnswers,
+        });
+
+        const res = await api.chatCRM(payload, false, selectedCrmType ?? undefined, updatedAnswers);
 
         const reply = res.reply ?? "Thanks! Let me ask you one more thing.";
         const ready = res.ready_to_generate ?? false;
@@ -357,6 +347,7 @@ export const CRMChatPage: React.FC = () => {
       }
     },
     [
+      messages,
       pendingQuestion, questAnswers, selectedCrmType,
       checkAndAdvance, setMessages, setInput, setQuestAnswers,
       setPendingQuestion, setReadyToGenerate,
@@ -388,7 +379,13 @@ export const CRMChatPage: React.FC = () => {
         .filter((m) => !m.isLoading)
         .map((m) => ({ role: m.role, content: m.content }));
 
-      const res = await api.chatCRM(payload, true, selectedCrmType ?? undefined);
+      // Send both the chat history AND the structured questionnaire answers
+      const res = await api.chatCRM(
+        payload, 
+        true, 
+        selectedCrmType ?? undefined,
+        questAnswers  // ← NEW: Pass structured answers
+      );
 
       if (!res.configuration) throw new Error('No configuration returned.');
 
@@ -447,8 +444,6 @@ export const CRMChatPage: React.FC = () => {
 
   // ── Render ─────────────────────────────────────────────────────────
 
-  const showChips = messages.length <= 2 && !selectedCrmType && !draftConfig;
-
   return (
     <div className="flex flex-col h-full max-w-3xl mx-auto space-y-4">
 
@@ -474,32 +469,7 @@ export const CRMChatPage: React.FC = () => {
         </Button>
       </div>
 
-      {/* ── CRM Type Chips ─────────────────────────────────────────── */}
-      {showChips && (
-        <div className="space-y-2">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-            Choose a CRM type to get started:
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {CRM_TYPES.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => handleSelectCrmType(t.id)}
-                className="flex flex-col items-start px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:border-aura-cyan hover:bg-cyan-50/40 transition-all text-left focus:outline-none focus:ring-2 focus:ring-aura-cyan/40 group"
-                aria-label={`Select ${t.label}`}
-              >
-                <span className="text-xs font-bold text-aura-navy group-hover:text-aura-deep">
-                  {t.label}
-                </span>
-                <span className="text-[10px] text-slate-400">{t.description}</span>
-              </button>
-            ))}
-          </div>
-          <p className="text-[11px] text-slate-400">
-            Or just type what you need below — AURA will figure out the rest.
-          </p>
-        </div>
-      )}
+
 
       {/* ── Selected CRM type badge ────────────────────────────────── */}
       {selectedCrmType && !draftConfig && (

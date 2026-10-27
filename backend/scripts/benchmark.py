@@ -144,7 +144,6 @@ def bench_fallback_sync() -> None:
     provider = OllamaAIProvider(
         base_url="http://127.0.0.1:59999",
         timeout=0.1,
-        enable_fallback=True,
     )
 
     times: list[float] = []
@@ -166,7 +165,6 @@ async def _bench_fallback_async() -> None:
     provider = OllamaAIProvider(
         base_url="http://127.0.0.1:59999",
         timeout=0.1,
-        enable_fallback=True,
     )
     times: list[float] = []
     for prompt in [REAL_ESTATE_PROMPT, SAAS_PROMPT, HEALTHCARE_PROMPT] * 3:
@@ -229,7 +227,7 @@ async def _bench_concurrency() -> dict[str, Any]:
     op._async_generation_semaphore = asyncio.BoundedSemaphore(4)
 
     try:
-        provider = OllamaAIProvider(enable_fallback=False)
+        provider = OllamaAIProvider()
         n_requests = 8
 
         t0 = time.perf_counter()
@@ -300,7 +298,6 @@ def print_config_summary() -> None:
     print(f"  Configured timeout:       12000ms (hardcoded in OllamaAIProvider)")
     print(f"  Max concurrent requests:  4 (asyncio.BoundedSemaphore)")
     print(f"  Max repair attempts:      1 (MAX_REPAIR_ATTEMPTS)")
-    print(f"  Fallback enabled:         True (enable_fallback=True in factory)")
     print(f"  Supabase URL:             {'configured' if 'localhost' not in settings.supabase_url else 'unconfigured'}")
     print(f"  JWT secret:               {'configured' if settings.supabase_jwt_secret else 'NOT SET'}")
     print(f"  Service role key:         {'configured' if settings.supabase_service_role_key else 'NOT SET'}")

@@ -898,7 +898,7 @@ def test_evolution_proposal_generate_clears_last_warnings():
     from app.services.ollama_provider import OllamaAIProvider
     from app.services.laya_system1 import LayaSystem1
 
-    provider = OllamaAIProvider(enable_fallback=True)
+    provider = OllamaAIProvider()
 
     # Simulate a prior CRM generation that set a fallback warning
     provider.last_warnings = ["AI provider fallback: stale warning from crm/generate"]

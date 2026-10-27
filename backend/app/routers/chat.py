@@ -16,7 +16,7 @@ import asyncio
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from app.auth import CurrentUser
 from app.config import get_settings, Settings
@@ -31,17 +31,16 @@ def _chat_reply_response(data: dict[str, Any], source: str):
     """Attach safe response provenance to a CRM Builder reply."""
     logger.info("[AURA] CRM Builder reply response_source=%s ready_to_generate=%s",
                 source, data.get("ready_to_generate"))
-    data.setdefault("ai", {"provider": "groq", "model": get_settings().groq_model, "used": False, "fallback": source == "fallback"})
-    data.setdefault("routing", {"route": "system2_groq", "requires_llm": True, "laya_mode": "deterministic", "laya_model_loaded": False})
+    data.setdefault("ai", {"provider": "ollama/qwen", "model": "qwen2.5:3b", "used": False, "fallback": False})
+    data.setdefault("routing", {"route": "qwen_generation", "requires_llm": True, "laya_mode": "validation_only", "laya_model_loaded": False})
     return success_response({**data, "response_source": source})
 
 
 def _chat_error_response(status_code: int, code: str, message: str, *, ai_used: bool = False):
     logger.warning("[AURA] CRM Builder error response code=%s", code)
-    settings = get_settings()
     return error_response(status_code, code, message, response_source="error",
-                          ai={"provider": "groq", "model": settings.groq_model, "used": ai_used, "fallback": True},
-                          routing={"route": "system2_groq", "requires_llm": True, "laya_mode": "deterministic", "laya_model_loaded": False})
+                          ai={"provider": "ollama/qwen", "model": "qwen2.5:3b", "used": ai_used, "fallback": False},
+                          routing={"route": "qwen_generation", "requires_llm": True, "laya_mode": "validation_only", "laya_model_loaded": False})
 
 
 router = APIRouter(prefix="/crm/chat", tags=["CRM Chat"])
@@ -61,14 +60,24 @@ async def runtime_status(user_id: CurrentUser, settings: Annotated[Settings, Dep
 # ── Request / Response schemas ──────────────────────────────────────
 
 class ChatMessage(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    
     role: str = Field(..., pattern="^(user|assistant)$")
     content: str = Field(..., min_length=1, max_length=8000)
+    # Allow but ignore extra fields from frontend (response_source, isLoading, choices)
+    response_source: str | None = None
+    isLoading: bool | None = None
+    choices: list[str] | None = None
 
 
 class ChatRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    
     messages: list[ChatMessage] = Field(..., min_length=1, max_length=40)
     generate_now: bool = False
     crm_type: str | None = Field(default=None, max_length=120)  # optional context from UI chip
+    # NEW: Structured questionnaire answers from the CRM builder
+    quest_answers: dict[str, str | None] = Field(default_factory=dict)
 
 
 class ChatResponse(BaseModel):
@@ -116,39 +125,25 @@ Constraints:
 # ── Groq helpers ────────────────────────────────────────────────
 
 def _call_groq_builder(messages: list[dict], system: str, timeout: float = 120.0) -> str | None:
-    """Compatibility-named adapter; CRM Builder inference is served by Groq."""
-    from app.services.groq_provider import GroqProvider
+    """Call the Qwen AI provider for CRM Builder responses."""
+    from app.services.ai_provider import get_ai_provider
     try:
-        response = GroqProvider().chat([{"role": "system", "content": system}, *messages], max_tokens=512)
-        return str(response.get("content") or "").strip() or None
+        provider = get_ai_provider("local")
+        logger.info("[_call_groq_builder] provider type=%s, has_chat=%s", 
+                   type(provider).__name__, hasattr(provider, "chat"))
+        if hasattr(provider, "chat"):
+            logger.info("[_call_groq_builder] Calling provider.chat() for conversational response")
+            response = provider.chat(messages, system_prompt=system, max_tokens=512)
+            logger.info("[_call_groq_builder] chat() returned: %s", response)
+            return str(response.get("content") or "").strip() or None
+        else:
+            logger.warning("[_call_groq_builder] Provider has no chat method, using fallback")
+            # Fallback: use basic prompt-response
+            response = provider.generate_crm_config(system + "\n" + str(messages[-1].get("content", "")))
+            return str(response.get("content") or "").strip() or None
     except Exception as exc:
-        logger.warning("[AURA] Groq Builder request failed (%s)", type(exc).__name__)
+        logger.warning("Qwen provider request failed (%s): %s", type(exc).__name__, exc)
         return None
-
-
-def _fallback_reply(messages: list[ChatMessage]) -> tuple[str, bool]:
-    """Deterministic fallback when Groq is unavailable during conversation."""
-    count = sum(1 for m in messages if m.role == "user")
-    questions = [
-        "What kind of business is this CRM for — real estate, healthcare, sales, or something else?",
-        "What are the main things you need to track? For example: leads, clients, deals, appointments?",
-        "How many stages does your typical process have? For example: New → Contacted → Qualified → Won.",
-        "What's the most important field you need on each record — like budget, phone number, or priority?",
-    ]
-    if count <= len(questions):
-        reply = questions[count - 1]
-        ready = count >= len(questions)
-        if ready:
-            reply += "\n\n[READY_TO_GENERATE]"
-        return reply, ready
-    return "I have everything I need! Click 'Generate My CRM' to create your custom CRM.", True
-
-
-def _fallback_generate(messages: list[ChatMessage]) -> dict[str, Any]:
-    """Build a scaffold CRM from the conversation when Groq is unavailable."""
-    # Extract user messages to build a combined prompt for the scaffold
-    user_text = " ".join(m.content for m in messages if m.role == "user")
-    return LayaSystem1.generate_scaffold_config(user_text)
 
 
 # ── Routes ──────────────────────────────────────────────────────────
@@ -181,42 +176,56 @@ async def chat(
         if not any(m.role == "user" and m.content.strip() for m in body.messages):
             return _chat_error_response(422, "VALIDATION_ERROR", "Describe your business or what you want the CRM to manage.")
         
-        generation_prompt = (
-            f"Build a {body.crm_type} CRM. " if body.crm_type else ""
-        ) + "\nConversation (preserve the user's requested entities, fields, and stages):\n" + user_context
+        # Check if user provided structured answers (custom CRM with explicit requirements)
+        has_quest_answers = bool(body.quest_answers and any(body.quest_answers.values()))
+        
+        generation_prompt = ""
+        if body.crm_type and body.crm_type != "custom":
+            generation_prompt = f"Build a {body.crm_type} CRM."
+        elif has_quest_answers:
+            # For custom CRM with structured answers, create a prompt from answers
+            parts = []
+            if body.quest_answers.get("tracks"):
+                parts.append(f"Track: {body.quest_answers['tracks']}")
+            if body.quest_answers.get("pipeline_stages"):
+                parts.append(f"Stages: {body.quest_answers['pipeline_stages']}")
+            if body.quest_answers.get("key_fields"):
+                parts.append(f"Fields: {body.quest_answers['key_fields']}")
+            if body.quest_answers.get("team_size"):
+                parts.append(f"Team: {body.quest_answers['team_size']}")
+            generation_prompt = " ".join(parts)
+        
+        if generation_prompt:
+            generation_prompt += "\n"
+        generation_prompt += "Conversation (preserve the user's requested entities, fields, and stages):\n" + user_context
         
         provider = None
         config_dict: dict[str, Any] | None = None
         try:
             from app.services.ai_provider import get_ai_provider
-            provider = get_ai_provider("groq")
+            provider = get_ai_provider("local")
             if hasattr(provider, "generate_crm_config_async"):
                 config_dict = await provider.generate_crm_config_async(generation_prompt)
             else:
                 config_dict = await asyncio.to_thread(provider.generate_crm_config, generation_prompt)
             config_dict = CRMConfiguration(**config_dict).model_dump()
-            warnings = list(getattr(provider, "last_warnings", []))
+            warnings = []  # No warnings for successful generation
         except ValueError as exc:
-            return _chat_error_response(502, "AI_PROVIDER_ERROR", str(exc), ai_used=bool(getattr(provider, "last_used", False)))
-        except Exception:
-            logger.exception("Configured provider failed during chat CRM generation")
-            # Fall back to deterministic scaffold
-            warnings = [
-                "AI provider fallback: CRM generated via AURA's deterministic scaffold "
-                "after the AI provider was unavailable or returned unusable output."
-            ]
-            config_dict = _fallback_generate(body.messages)
+            return _chat_error_response(502, "GENERATION_ERROR", str(exc), ai_used=True)
+        except Exception as exc:
+            logger.exception("CRM generation failed")
+            return _chat_error_response(502, "GENERATION_ERROR", 
+                                       "CRM generation failed. Please check your Ollama connection and try again.", 
+                                       ai_used=True)
 
         return _chat_reply_response({
             "configuration": config_dict,
             "warnings": warnings,
             "ready_to_generate": False,
-            "ai": {"provider": "groq", "model": settings.groq_model,
-                   "used": bool(getattr(provider, "last_used", False) if provider else False),
-                   "fallback": bool(warnings)},
-            "routing": {"route": "system2_groq", "intent": "generate_crm", "requires_llm": True,
-                        "laya_mode": "deterministic", "laya_model_loaded": False},
-        }, "fallback" if warnings else "llm")
+            "ai": {"provider": "ollama/qwen", "model": "qwen2.5:3b", "used": True, "fallback": False},
+            "routing": {"route": "qwen_generation", "intent": "generate_crm", "requires_llm": True,
+                        "laya_mode": "validation_only", "laya_model_loaded": False},
+        }, "llm")
 
     # ── Branch: continue the conversation ───────────────────────────
     # Safety check on latest user message
@@ -226,7 +235,7 @@ async def chat(
     try:
         LayaSystem1.validate_prompt_safety(latest_user)
     except ValueError as exc:
-        return _chat_error_response(502, "AI_PROVIDER_ERROR", str(exc))
+        return _chat_error_response(502, "GENERATION_ERROR", str(exc))
 
     # Enrich the system prompt with the CRM type chip selection when provided
     system = (
@@ -244,36 +253,28 @@ async def chat(
             + system
         )
 
-    raw_reply = _call_groq_builder(messages_dicts, system)
-    fallback_used = raw_reply is None
-
-    if fallback_used:
-        reply, _ = _fallback_reply(body.messages)
-        ready = "[READY_TO_GENERATE]" in (reply or "")
-        clean_reply = (reply or "").replace("[READY_TO_GENERATE]", "").strip()
-        if ready and not clean_reply:
-            clean_reply = (
-                "I have all the information I need to build your CRM! "
-                "Click 'Generate My CRM' whenever you're ready."
-            )
-    else:
-        # Try to parse JSON response from Groq
-        try:
-            parsed = LayaSystem1.extract_json_payload(raw_reply or "")
-            clean_reply = str(parsed.get("reply", "")).strip()
-            ready = parsed.get("ready_to_generate", False) is True
-            if not clean_reply or len(clean_reply) > 1200:
-                raise ValueError("invalid reply")
-        except (ValueError, KeyError, TypeError):
-            clean_reply = "The AI interviewer returned an unusable response. Please retry; your conversation has been preserved."
-            ready = False
-            fallback_used = True
+    try:
+        raw_reply = _call_groq_builder(messages_dicts, system)
+        if not raw_reply:
+            return _chat_error_response(502, "GENERATION_ERROR", 
+                                       "CRM interviewer is currently unavailable. Please try again.")
+        
+        # Parse JSON response from Qwen
+        parsed = LayaSystem1.extract_json_payload(raw_reply)
+        clean_reply = str(parsed.get("reply", "")).strip()
+        ready = parsed.get("ready_to_generate", False) is True
+        if not clean_reply or len(clean_reply) > 1200:
+            raise ValueError("AI returned invalid reply format")
+            
+    except Exception as exc:
+        logger.warning("CRM interviewer response parsing failed: %s", exc)
+        return _chat_error_response(502, "GENERATION_ERROR", 
+                                   "Could not parse AI response. Your conversation has been preserved. Please try again.")
 
     return _chat_reply_response({
         "reply": clean_reply,
         "ready_to_generate": ready,
-        "fallback_used": fallback_used,
-        "ai": {"provider": "groq", "model": settings.groq_model, "used": raw_reply is not None, "fallback": fallback_used},
-        "routing": {"route": "system2_groq", "intent": "crm_interview", "requires_llm": True,
-                    "laya_mode": "deterministic", "laya_model_loaded": False},
-    }, "fallback" if fallback_used else "llm")
+        "ai": {"provider": "ollama/qwen", "model": "qwen2.5:3b", "used": True, "fallback": False},
+        "routing": {"route": "qwen_generation", "intent": "crm_interview", "requires_llm": True,
+                    "laya_mode": "validation_only", "laya_model_loaded": False},
+    }, "llm")

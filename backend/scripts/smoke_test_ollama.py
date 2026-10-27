@@ -40,7 +40,7 @@ def main():
         from app.services.ollama_provider import OllamaAIProvider
         from app.schemas.crm import CRMConfiguration
 
-        provider = OllamaAIProvider(base_url=base_url, model=target_model, timeout=30.0, enable_fallback=False)
+        provider = OllamaAIProvider(base_url=base_url, model=target_model, timeout=30.0)
         result = provider.generate_crm_config(prompt)
         config = CRMConfiguration(**result)
         

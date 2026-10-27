@@ -10,13 +10,16 @@ Key Responsibilities:
    and enforcing non-empty select options.
 4. Schema Repair & Normalization: Cleans raw LLM outputs (markdown stripping, identifier snake_casing,
    reserved keyword replacement).
-5. Evolution Intelligence: Strict allowlisting of workflow triggers and actions with verifiable evidence.
+5. User Input Normalization: Deterministic conversion of raw natural-language custom columns and statuses
+   into safe machine keys with bidirectional human/machine mapping.
+6. Evolution Intelligence: Strict allowlisting of workflow triggers and actions with verifiable evidence.
 """
 from __future__ import annotations
 
 import json
 import re
 from typing import Any
+from dataclasses import dataclass
 
 from app.schemas.crm import (
     CRMConfiguration,
@@ -44,6 +47,30 @@ CODE_EXEC_PATTERN = re.compile(
     r"\b(import\s+os|import\s+sys|subprocess|__import__|eval\(|exec\()\b",
     re.IGNORECASE,
 )
+
+# ────────────────────────────────────────────────────────────────
+# Normalization Data Structure
+# ────────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class NormalizedInput:
+    """Bidirectional mapping between raw user input and machine identifiers."""
+    machine_key: str  # e.g., "client_budget_size"
+    human_label: str  # e.g., "Client Budget Size"
+    original_raw: str  # e.g., "Client Budget Size!" (for auditing)
+
+
+@dataclass(frozen=True)
+class NormalizedSchema:
+    """Complete normalized schema with all custom columns and statuses mapped."""
+    column_mapping: dict[str, NormalizedInput]  # machine_key -> NormalizedInput
+    status_mapping: dict[str, NormalizedInput]  # machine_key -> NormalizedInput
+    laya_choice_criteria: dict[str, str]  # For Laya choice primitive: {machine_key: description}
+    laya_status_criteria: dict[str, str]  # For Laya choice primitive: {machine_key: description}
+
+
+# ────────────────────────────────────────────────────────────────
+
 
 INDUSTRY_TAXONOMIES: dict[str, dict[str, Any]] = {
     "saas": {
@@ -111,6 +138,155 @@ INDUSTRY_TAXONOMIES: dict[str, dict[str, Any]] = {
 
 class LayaSystem1:
     """Decision-intelligence and guardrail engine."""
+
+    # ────────────────────────────────────────────────────────────────
+    # USER INPUT NORMALIZATION LAYER
+    # ────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def _normalize_user_input(
+        cls,
+        raw_strings: list[str],
+        fallback_prefix: str = "field",
+        max_items: int = 50,
+    ) -> dict[str, NormalizedInput]:
+        """
+        Convert a list of raw, user-provided strings into deterministic,
+        safe machine identifiers with bidirectional mapping.
+
+        Args:
+            raw_strings: List of unstructured strings (e.g., ["Client Budget Size!", "Deal Stage"])
+            fallback_prefix: Prefix to use if a string becomes empty after cleaning (default: "field")
+            max_items: Maximum number of items to process (safety limit)
+
+        Returns:
+            Dictionary mapping machine_key -> NormalizedInput (bidirectional mapping)
+            {
+                "client_budget_size": NormalizedInput(
+                    machine_key="client_budget_size",
+                    human_label="Client Budget Size",
+                    original_raw="Client Budget Size!"
+                ),
+                ...
+            }
+
+        Processing:
+        1. Strip whitespace and special symbols from each string
+        2. Convert to lowercase and replace spaces with underscores
+        3. Remove duplicate underscores and clean edges
+        4. Validate against IDENTIFIER regex (start with letter, alphanumeric + underscore)
+        5. Handle collisions by appending numeric suffix
+        6. Check against RESERVED_FIELDS and add custom_ prefix if needed
+        """
+        result: dict[str, NormalizedInput] = {}
+        seen_keys: set[str] = set()
+
+        for idx, raw in enumerate(raw_strings[:max_items]):
+            if not isinstance(raw, str):
+                continue
+
+            original_raw = raw.strip()
+            if not original_raw:
+                continue
+
+            # ── Step 1: Clean and normalize ──────────────────────────
+            # Remove special symbols; keep only alphanumeric, spaces, and underscores
+            cleaned = re.sub(r"[^a-zA-Z0-9_\s-]+", "", original_raw)
+            # Convert to lowercase, replace spaces/hyphens with underscores
+            cleaned = cleaned.lower().replace(" ", "_").replace("-", "_")
+            # Collapse multiple underscores into one
+            cleaned = re.sub(r"_+", "_", cleaned)
+            # Trim underscores from edges
+            cleaned = cleaned.strip("_")
+
+            # ── Step 2: Ensure valid identifier format ──────────────
+            if not cleaned or not cleaned[0].isalpha():
+                # If the string starts with a digit or is empty, prefix it
+                cleaned = f"{fallback_prefix}_{cleaned}" if cleaned else fallback_prefix
+
+            # ── Step 3: Truncate to IDENTIFIER max length (63 chars) ─
+            cleaned = cleaned[:63]
+
+            # ── Step 4: Handle collisions ────────────────────────────
+            machine_key = cleaned
+            collision_idx = 0
+            while machine_key in seen_keys:
+                collision_idx += 1
+                candidate = f"{cleaned}_{collision_idx}"[:63]
+                machine_key = candidate
+
+            # ── Step 5: Check reserved fields ────────────────────────
+            if machine_key in RESERVED_FIELDS:
+                machine_key = f"custom_{machine_key}"[:63]
+
+            seen_keys.add(machine_key)
+
+            # ── Step 6: Build human-readable label ───────────────────
+            # Convert machine_key back to title case for human readability
+            human_label = machine_key.replace("_", " ").title()
+
+            # ── Store the bidirectional mapping ──────────────────────
+            result[machine_key] = NormalizedInput(
+                machine_key=machine_key,
+                human_label=human_label,
+                original_raw=original_raw,
+            )
+
+        return result
+
+    @classmethod
+    def normalize_custom_schema(
+        cls,
+        custom_columns: list[str] | None = None,
+        custom_statuses: list[str] | None = None,
+    ) -> NormalizedSchema:
+        """
+        Normalize both custom columns and statuses into a unified schema
+        that Laya and Qwen can work with deterministically.
+
+        Args:
+            custom_columns: List of user-provided column names (e.g., ["Budget", "Priority!"])
+            custom_statuses: List of user-provided status options (e.g., ["In Progress", "On Hold"])
+
+        Returns:
+            NormalizedSchema with:
+            - column_mapping: dict of machine_key -> NormalizedInput for columns
+            - status_mapping: dict of machine_key -> NormalizedInput for statuses
+            - laya_choice_criteria: dict of {machine_key: description} for Laya choice primitive
+            - laya_status_criteria: dict of {machine_key: description} for Laya choice primitive
+
+        This ensures that:
+        1. Laya's choice primitive always receives structured, lowercase machine keys
+        2. Qwen's prompt receives a JSON schema with strictly validated keys
+        3. No re-prompting or clarification loops occur
+        """
+        col_mapping = cls._normalize_user_input(
+            custom_columns or [],
+            fallback_prefix="column",
+        )
+        status_mapping = cls._normalize_user_input(
+            custom_statuses or [],
+            fallback_prefix="status",
+        )
+
+        # Build Laya choice criteria (for routing decisions)
+        laya_choice_criteria = {
+            mk: ni.human_label for mk, ni in col_mapping.items()
+        }
+        laya_status_criteria = {
+            mk: ni.human_label for mk, ni in status_mapping.items()
+        }
+
+        return NormalizedSchema(
+            column_mapping=col_mapping,
+            status_mapping=status_mapping,
+            laya_choice_criteria=laya_choice_criteria,
+            laya_status_criteria=laya_status_criteria,
+        )
+
+    # ────────────────────────────────────────────────────────────────
+    # EXISTING METHODS (preserved below)
+    # ────────────────────────────────────────────────────────────────
 
     @classmethod
     def classify_request(cls, prompt: str) -> dict[str, Any]:
@@ -197,7 +373,11 @@ class LayaSystem1:
 
     @classmethod
     def repair_crm_configuration(cls, raw_data: dict[str, Any], prompt: str) -> dict[str, Any]:
-        """Normalize and repair raw JSON to guarantee Pydantic schema conformity."""
+        """Normalize and repair raw JSON to guarantee Pydantic schema conformity.
+        
+        This method now incorporates the normalization layer to handle custom columns
+        and statuses that may have been provided in raw_data.
+        """
         industry = cls.detect_industry(prompt)
         tax = INDUSTRY_TAXONOMIES.get(industry, INDUSTRY_TAXONOMIES["saas"])
 
@@ -208,6 +388,28 @@ class LayaSystem1:
 
         raw_industry = str(raw_data.get("industry") or industry).strip().lower()
         clean_industry = cls.sanitize_identifier(raw_industry, fallback_prefix="industry")
+
+        # ────────────────────────────────────────────────────────────────
+        # NEW: Extract custom columns and statuses if provided
+        # ────────────────────────────────────────────────────────────────
+        custom_columns = raw_data.get("custom_columns")
+        custom_statuses = raw_data.get("custom_statuses")
+        
+        if custom_columns or custom_statuses:
+            # Use normalization layer to convert raw user input
+            normalized = cls.normalize_custom_schema(
+                custom_columns=custom_columns if isinstance(custom_columns, list) else None,
+                custom_statuses=custom_statuses if isinstance(custom_statuses, list) else None,
+            )
+            # Store normalized mappings in the configuration for downstream use
+            raw_data["_normalized_columns"] = {
+                k: {"machine_key": v.machine_key, "human_label": v.human_label}
+                for k, v in normalized.column_mapping.items()
+            }
+            raw_data["_normalized_statuses"] = {
+                k: {"machine_key": v.machine_key, "human_label": v.human_label}
+                for k, v in normalized.status_mapping.items()
+            }
 
         # Pipeline stages
         raw_stages = raw_data.get("pipeline_stages")
@@ -341,6 +543,147 @@ class LayaSystem1:
             ],
             "pipeline_stages": tax["pipeline"],
         }
+        return cls.repair_crm_configuration(raw, prompt)
+
+    @classmethod
+    def generate_custom_crm_from_answers(
+        cls,
+        crm_type: str | None,
+        tracks: str | None,
+        pipeline_stages: str | None,
+        key_fields: str | None,
+        team_size: str | None,
+        prompt: str = "",
+    ) -> dict[str, Any]:
+        """Generate a CRM configuration from structured questionnaire answers.
+        
+        This is used when user selects "Custom CRM" or provides explicit answers.
+        Respects user input instead of using predefined templates.
+        
+        Args:
+            crm_type: "custom", "sales_pipeline", "client_management", etc.
+            tracks: What user wants to track (e.g., "leads and deals")
+            pipeline_stages: Stages user specified (e.g., "New, In Progress, Done")
+            key_fields: Key fields user wants (e.g., "lead, email, phone")
+            team_size: Team size context
+            prompt: Original user prompt for fallback industry detection
+            
+        Returns:
+            Valid CRM configuration dict
+        """
+        # Determine entity name and industry from user's tracking needs
+        entity_name = "record"
+        industry = "general"
+        
+        if tracks:
+            tracks_lower = tracks.lower()
+            if "lead" in tracks_lower or "deal" in tracks_lower:
+                entity_name = "lead"
+                industry = "saas"  # Sales-like
+            elif "patient" in tracks_lower or "medical" in tracks_lower:
+                entity_name = "patient"
+                industry = "healthcare"
+            elif "property" in tracks_lower or "listing" in tracks_lower:
+                entity_name = "property_lead"
+                industry = "real_estate"
+            elif "customer" in tracks_lower or "order" in tracks_lower:
+                entity_name = "customer"
+                industry = "ecommerce"
+            elif "task" in tracks_lower or "project" in tracks_lower:
+                entity_name = "task"
+        
+        # Build CRM name
+        crm_name = "Custom CRM"
+        if tracks:
+            crm_name = f"{tracks.split()[0].title()} CRM" if tracks.split() else "Custom CRM"
+        
+        # Parse fields from user input
+        fields = []
+        if key_fields:
+            field_names = [f.strip() for f in key_fields.split(",")]
+            for i, field_name in enumerate(field_names[:20]):  # Max 20 fields
+                if not field_name:
+                    continue
+                
+                # Infer field type
+                field_name_lower = field_name.lower()
+                if "email" in field_name_lower:
+                    field_type = "email"
+                elif "phone" in field_name_lower:
+                    field_type = "phone"
+                elif "date" in field_name_lower:
+                    field_type = "date"
+                elif "amount" in field_name_lower or "price" in field_name_lower or "value" in field_name_lower or "budget" in field_name_lower or "cost" in field_name_lower:
+                    field_type = "number"
+                elif "status" in field_name_lower or "stage" in field_name_lower:
+                    field_type = "select"
+                else:
+                    field_type = "text"
+                
+                # Mark first field and status fields as required
+                required = i == 0 or "status" in field_name_lower
+                
+                fields.append({
+                    "name": cls.sanitize_identifier(field_name),
+                    "label": field_name.strip(),
+                    "type": field_type,
+                    "required": required,
+                    "options": ["Active", "Inactive", "On Hold"] if field_type == "select" else None,
+                })
+        
+        # If no fields specified, provide sensible defaults
+        if not fields:
+            fields = [
+                {
+                    "name": "name",
+                    "label": "Name",
+                    "type": "text",
+                    "required": True,
+                    "options": None,
+                },
+                {
+                    "name": "email",
+                    "label": "Email",
+                    "type": "email",
+                    "required": False,
+                    "options": None,
+                },
+                {
+                    "name": "status",
+                    "label": "Status",
+                    "type": "select",
+                    "required": True,
+                    "options": ["Active", "Inactive"],
+                },
+            ]
+        
+        # Parse pipeline stages
+        stages = []
+        if pipeline_stages:
+            # Handle both "New, In Progress, Done" and "New → In Progress → Done" formats
+            stage_texts = pipeline_stages.replace("→", ",").split(",")
+            for stage in stage_texts:
+                stage = stage.strip()
+                if stage and stage not in stages:
+                    stages.append(stage)
+        
+        # If no stages specified, provide sensible defaults
+        if not stages:
+            stages = ["New", "In Progress", "Done"]
+        
+        raw = {
+            "name": crm_name,
+            "industry": industry,
+            "entities": [
+                {
+                    "name": entity_name,
+                    "label": entity_name.replace("_", " ").title(),
+                    "fields": fields,
+                }
+            ],
+            "pipeline_stages": stages,
+        }
+        
         return cls.repair_crm_configuration(raw, prompt)
 
     @classmethod

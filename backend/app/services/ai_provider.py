@@ -210,7 +210,6 @@ def get_ai_provider(provider_name: str = "groq") -> AIProvider:
         return OllamaAIProvider(
             base_url=settings.local_llm_base_url,
             model=settings.local_llm_model,
-            enable_fallback=True,
             decision_engine=LayaDecisionEngine(),
         )
     raise ValueError(f"Unsupported AI provider: {provider_name}. Use 'groq', 'local', or explicit test-only 'mock'.")

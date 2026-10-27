@@ -30,20 +30,18 @@ MAX_REPAIR_ATTEMPTS = 1
 
 
 class OllamaAIProvider(AIProvider):
-    """Local Ollama AI Provider utilizing Qwen3-4B / local LLM."""
+    """Local Ollama AI Provider utilizing Qwen CRM generation."""
 
     def __init__(
         self,
         base_url: str = "http://localhost:11434",
         model: str = "qwen2.5:3b",
         timeout: float = 120.0,
-        enable_fallback: bool = True,
         decision_engine: LayaDecisionEngine | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model or "qwen2.5:3b"
         self.timeout = timeout
-        self.enable_fallback = enable_fallback
         self.decision_engine = decision_engine
         self.last_warnings = []
 
@@ -181,70 +179,62 @@ class OllamaAIProvider(AIProvider):
         return configuration
 
     def generate_crm_config(self, prompt: str) -> dict[str, Any]:
-        """Generate a validated CRM configuration using Qwen3-4B and Laya System 1 (sync)."""
+        """Generate a validated CRM configuration using Qwen via Ollama (sync).
+        
+        Raises:
+            ValueError: If Qwen is unavailable or returns invalid output.
+        """
         LayaSystem1.validate_prompt_safety(prompt)
         decision = self.decision_engine.decide_generation(prompt) if self.decision_engine else None
         decision_prompt = f"{prompt}\nSystem 1 classified industry: {decision.industry}." if decision else prompt
         system_prompt = self._get_system_prompt(decision)
         raw_response = self._call_ollama_generate(system_prompt, decision_prompt)
 
-        if raw_response:
-            for _ in range(MAX_REPAIR_ATTEMPTS):
-                try:
-                    parsed_json = LayaSystem1.extract_json_payload(raw_response)
-                    repaired = self._apply_generation_decision(
-                        LayaSystem1.repair_crm_configuration(parsed_json, prompt), decision
-                    )
-                    CRMConfiguration(**repaired)
-                    self.last_warnings = []
-                    return repaired
-                except Exception as exc:
-                    logger.warning("Failed to parse or repair Ollama output: %s", exc)
+        if not raw_response:
+            raise ValueError("Qwen CRM generation is currently unavailable. Please check your Ollama connection and try again.")
 
-        # Resilient fallback to Laya System 1 deterministic scaffolding
-        if self.enable_fallback:
-            self.last_warnings = [
-                "AI provider fallback: Generated via AURA's deterministic scaffold after the System 1 decision; "
-                "Ollama was unavailable or returned unusable output."
-            ]
-            return self._apply_generation_decision(
-                LayaSystem1.generate_scaffold_config(decision_prompt), decision
-            )
+        for _ in range(MAX_REPAIR_ATTEMPTS):
+            try:
+                parsed_json = LayaSystem1.extract_json_payload(raw_response)
+                repaired = self._apply_generation_decision(
+                    LayaSystem1.repair_crm_configuration(parsed_json, prompt), decision
+                )
+                CRMConfiguration(**repaired)
+                self.last_warnings = []
+                return repaired
+            except Exception as exc:
+                logger.warning("Failed to parse or repair Qwen output: %s", exc)
 
-        raise ValueError("Ollama AI provider failed to generate a valid CRM configuration.")
+        raise ValueError("Qwen returned invalid CRM configuration that could not be repaired.")
 
     async def generate_crm_config_async(self, prompt: str) -> dict[str, Any]:
-        """Generate a validated CRM configuration using Qwen3-4B and Laya System 1 (async)."""
+        """Generate a validated CRM configuration using Qwen via Ollama (async).
+        
+        Raises:
+            ValueError: If Qwen is unavailable or returns invalid output.
+        """
         LayaSystem1.validate_prompt_safety(prompt)
         decision = await asyncio.to_thread(self.decision_engine.decide_generation, prompt) if self.decision_engine else None
         decision_prompt = f"{prompt}\nSystem 1 classified industry: {decision.industry}." if decision else prompt
         system_prompt = self._get_system_prompt(decision)
         raw_response = await self._call_ollama_generate_async(system_prompt, decision_prompt)
 
-        if raw_response:
-            for _ in range(MAX_REPAIR_ATTEMPTS):
-                try:
-                    parsed_json = LayaSystem1.extract_json_payload(raw_response)
-                    repaired = self._apply_generation_decision(
-                        LayaSystem1.repair_crm_configuration(parsed_json, prompt), decision
-                    )
-                    CRMConfiguration(**repaired)
-                    self.last_warnings = []
-                    return repaired
-                except Exception as exc:
-                    logger.warning("Failed to parse or repair Ollama output: %s", exc)
+        if not raw_response:
+            raise ValueError("Qwen CRM generation is currently unavailable. Please check your Ollama connection and try again.")
 
-        # Resilient fallback to Laya System 1 deterministic scaffolding
-        if self.enable_fallback:
-            self.last_warnings = [
-                "AI provider fallback: Generated via AURA's deterministic scaffold after the System 1 decision; "
-                "Ollama was unavailable or returned unusable output."
-            ]
-            return self._apply_generation_decision(
-                LayaSystem1.generate_scaffold_config(decision_prompt), decision
-            )
+        for _ in range(MAX_REPAIR_ATTEMPTS):
+            try:
+                parsed_json = LayaSystem1.extract_json_payload(raw_response)
+                repaired = self._apply_generation_decision(
+                    LayaSystem1.repair_crm_configuration(parsed_json, prompt), decision
+                )
+                CRMConfiguration(**repaired)
+                self.last_warnings = []
+                return repaired
+            except Exception as exc:
+                logger.warning("Failed to parse or repair Qwen output: %s", exc)
 
-        raise ValueError("Ollama AI provider failed to generate a valid CRM configuration.")
+        raise ValueError("Qwen returned invalid CRM configuration that could not be repaired.")
 
     def generate_evolution_proposal(
         self, prompt: str, crm_config: dict[str, Any], analytics: dict[str, Any]
@@ -263,3 +253,116 @@ class OllamaAIProvider(AIProvider):
         # evolution response for a request that reuses the same async context.
         self.last_warnings = []
         return proposal
+
+    def chat(self, messages: list[dict[str, str]], system_prompt: str, max_tokens: int = 512) -> dict[str, str]:
+        """Conversational chat endpoint for CRM discovery/interviewing (sync)."""
+        # Convert messages to prompt format
+        user_prompt = ""
+        for msg in messages:
+            role = msg.get("role", "").lower()
+            content = msg.get("content", "").strip()
+            if role == "user":
+                user_prompt = content  # Use the latest user message
+        
+        if not user_prompt:
+            raise ValueError("No user message found in messages array")
+        
+        # Ensure system prompt includes JSON response requirement
+        json_system_prompt = system_prompt
+        if "JSON" not in system_prompt.upper():
+            json_system_prompt += '\nRespond with ONLY a JSON object with "reply" (string) and "ready_to_generate" (boolean) fields.'
+        
+        endpoint = f"{self.base_url}/api/generate"
+        payload = {
+            "model": self.model,
+            "prompt": f"<|im_start|>system\n{json_system_prompt}<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n",
+            "stream": False,
+            "think": False,
+            "options": {
+                "temperature": 0.7,
+                "top_p": 0.95,
+            },
+        }
+        
+        logger.info("[AURA-CHAT] calling Ollama endpoint=%s model=%s", endpoint, self.model)
+        
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                resp = client.post(endpoint, json=payload)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    response_text = data.get("response", "").strip()
+                    if not response_text:
+                        raise ValueError("Ollama returned empty response")
+                    logger.info("[AURA-CHAT] success response_len=%d", len(response_text))
+                    return {"content": response_text}
+                else:
+                    logger.error("[AURA-CHAT] HTTP error=%d", resp.status_code)
+                    raise ValueError(f"Ollama HTTP {resp.status_code}")
+        except Exception as exc:
+            logger.error("[AURA-CHAT] failed: %s", exc)
+            raise ValueError(f"Ollama chat failed: {exc}")
+
+    async def chat_async(self, messages: list[dict[str, str]], system_prompt: str, max_tokens: int = 512) -> dict[str, str]:
+        """Conversational chat endpoint for CRM discovery/interviewing (async).
+        
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            system_prompt: System instruction for the conversation
+            max_tokens: Maximum tokens in response
+            
+        Returns:
+            Dict with 'content' key containing the response text
+            
+        Raises:
+            ValueError: If Ollama is unavailable
+        """
+        # Convert messages to prompt format
+        user_prompt = ""
+        for msg in messages:
+            role = msg.get("role", "").lower()
+            content = msg.get("content", "").strip()
+            if role == "user":
+                user_prompt = content  # Use the latest user message
+        
+        if not user_prompt:
+            raise ValueError("No user message found in messages array")
+        
+        endpoint = f"{self.base_url}/api/generate"
+        payload = {
+            "model": self.model,
+            "prompt": f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n",
+            "stream": False,
+            "think": False,
+            "options": {
+                "temperature": 0.7,  # Higher temp for conversational variety
+                "top_p": 0.95,
+            },
+        }
+        
+        logger.info("[AURA-CHAT-ASYNC] Ollama endpoint=%s model=%s", endpoint, self.model)
+        
+        try:
+            async with _async_generation_semaphore:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    resp = await client.post(endpoint, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        response_text = data.get("response", "").strip()
+                        if not response_text:
+                            raise ValueError("Ollama returned empty response")
+                        logger.info("[AURA-CHAT-ASYNC] Ollama success, response_length=%d", len(response_text))
+                        return {"content": response_text}
+                    else:
+                        logger.error("[AURA-CHAT-ASYNC] Ollama HTTP error status=%d body=%s",
+                                   resp.status_code, resp.text)
+                        raise ValueError(f"Ollama returned HTTP {resp.status_code}: {resp.text[:200]}")
+        except httpx.ConnectError as exc:
+            logger.error("[AURA-CHAT-ASYNC] Ollama connection failed: %s", exc)
+            raise ValueError(f"Cannot reach Ollama at {endpoint}: {exc}")
+        except httpx.TimeoutException as exc:
+            logger.error("[AURA-CHAT-ASYNC] Ollama request timed out: %s", exc)
+            raise ValueError(f"Ollama request timed out after {self.timeout}s")
+        except Exception as exc:
+            logger.error("[AURA-CHAT-ASYNC] Ollama request failed: %s %s", type(exc).__name__, exc)
+            raise ValueError(f"Ollama request failed: {exc}")
