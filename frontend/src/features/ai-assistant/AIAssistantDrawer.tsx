@@ -24,6 +24,11 @@ interface Message {
   action?: { label: string; route: string };
 }
 
+interface ToolCall {
+  name: string;
+  arguments: Record<string, any>;
+}
+
 function makeWelcome(crmName: string): Message {
   return {
     sender: 'ai',
@@ -33,6 +38,39 @@ function makeWelcome(crmName: string): Message {
       `or suggest improvements. What would you like to know?`,
     time: 'Just now',
   };
+}
+
+/**
+ * Parse TOOL_CALL: {...} JSON objects from LLM reply.
+ * Returns list of {name, arguments} objects.
+ */
+function parseToolCalls(text: string): ToolCall[] {
+  const toolCalls: ToolCall[] = [];
+  
+  // Match TOOL_CALL: {...} pattern (regex handles nested JSON up to ~2 levels)
+  const regex = /TOOL_CALL:\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})/g;
+  let match;
+  
+  while ((match = regex.exec(text)) !== null) {
+    try {
+      const call_json = match[1];
+      const call_obj = JSON.parse(call_json) as ToolCall;
+      if (call_obj.name && call_obj.arguments) {
+        toolCalls.push(call_obj);
+      }
+    } catch (e) {
+      console.warn('Failed to parse tool call:', match[1], e);
+    }
+  }
+  
+  return toolCalls;
+}
+
+/**
+ * Remove TOOL_CALL markers from text for display.
+ */
+function cleanToolCallMarkers(text: string): string {
+  return text.replace(/TOOL_CALL:\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g, '').trim();
 }
 
 export const AIAssistantDrawer: React.FC<AIAssistantDrawerProps> = ({ isOpen, onClose }) => {
@@ -49,6 +87,21 @@ export const AIAssistantDrawer: React.FC<AIAssistantDrawerProps> = ({ isOpen, on
   // Resets when the drawer is first opened after being closed.
   const [messages, setMessages] = useState<Message[]>([makeWelcome(crmName)]);
 
+  // Confirmation dialog state for dangerous tool operations
+  interface ConfirmationState {
+    visible: boolean;
+    title: string;
+    message: string;
+    toolCall?: ToolCall;
+    onConfirm?: () => void;
+    onCancel?: () => void;
+  }
+  const [confirmation, setConfirmation] = useState<ConfirmationState>({
+    visible: false,
+    title: '',
+    message: '',
+  });
+
   // Reset greeting when a different CRM becomes active
   const lastCrmId = useRef<string | null>(crmId);
   useEffect(() => {
@@ -64,6 +117,102 @@ export const AIAssistantDrawer: React.FC<AIAssistantDrawerProps> = ({ isOpen, on
   }, [messages, isThinking]);
 
   if (!isOpen) return null;
+
+  /**
+   * Execute a tool call via the backend.
+   */
+  const executeToolCall = async (toolCall: ToolCall): Promise<{ success: boolean; error?: string }> => {
+    if (!crmId) {
+      return { success: false, error: 'No active CRM' };
+    }
+
+    try {
+      await api.executeToolCall(crmId, {
+        tool_name: toolCall.name,
+        arguments: toolCall.arguments,
+      });
+
+      // Show success message in chat
+      const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const successMsg: Message = {
+        sender: 'ai',
+        text: `✓ Successfully executed '${toolCall.name}'. Changes saved.`,
+        time: now,
+      };
+      setMessages((prev) => [...prev, successMsg]);
+
+      return { success: true };
+    } catch (err: unknown) {
+      const errorText = err instanceof Error ? err.message : 'Tool execution failed';
+      const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const errorMsg: Message = {
+        sender: 'ai',
+        text: `✗ Operation failed: ${errorText}`,
+        time: now,
+      };
+      setMessages((prev) => [...prev, errorMsg]);
+
+      return { success: false, error: errorText };
+    }
+  };
+
+  /**
+   * Show confirmation dialog for dangerous operations (delete, remove_field, remove_stage).
+   * Returns a promise that resolves when user confirms or cancels.
+   */
+  const showToolConfirmationDialog = (toolCall: ToolCall): Promise<void> => {
+    return new Promise((resolve) => {
+      const handleConfirm = async () => {
+        setConfirmation({ visible: false, title: '', message: '' });
+        await executeToolCall(toolCall);
+        resolve();
+      };
+
+      const handleCancel = () => {
+        setConfirmation({ visible: false, title: '', message: '' });
+        const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        setMessages((prev) => [
+          ...prev,
+          {
+            sender: 'ai',
+            text: `⚠ Operation cancelled. No changes made.`,
+            time: now,
+          },
+        ]);
+        resolve();
+      };
+
+      setConfirmation({
+        visible: true,
+        title: `Confirm ${toolCall.name}`,
+        message: `This action cannot be undone. Are you sure you want to proceed?`,
+        toolCall,
+        onConfirm: handleConfirm,
+        onCancel: handleCancel,
+      });
+    });
+  };
+
+  /**
+   * Refresh data after tool execution (dispatch custom events for other components to listen to).
+   */
+  const refreshDataAfterToolExecution = (toolCalls: ToolCall[]) => {
+    const needsRecordsRefresh = toolCalls.some(
+      (t) => ['create_record', 'update_record', 'delete_record'].includes(t.name)
+    );
+
+    const needsConfigRefresh = toolCalls.some(
+      (t) => ['add_crm_field', 'update_crm_field', 'delete_crm_field', 'add_crm_stage', 'delete_crm_stage'].includes(t.name)
+    );
+
+    if (needsRecordsRefresh) {
+      window.dispatchEvent(new CustomEvent('records-changed'));
+    }
+
+    if (needsConfigRefresh) {
+      window.dispatchEvent(new CustomEvent('crm-config-changed'));
+    }
+  };
 
   const quickPrompts = [
     { label: 'CRM Fields', query: `What fields does my ${crmName} have?` },
@@ -93,10 +242,33 @@ export const AIAssistantDrawer: React.FC<AIAssistantDrawerProps> = ({ isOpen, on
 
       const res = await api.copilotChat(payload, crmId);
 
+      // Parse tool calls from the reply
+      const toolCalls = parseToolCalls(res.reply);
+      
+      // Remove tool call markers from display text
+      const displayText = cleanToolCallMarkers(res.reply);
+
       const replyTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      // If there are tool calls, execute them
+      if (toolCalls.length > 0) {
+        for (const toolCall of toolCalls) {
+          // Check if tool requires confirmation (dangerous operations)
+          const dangerousTools = ['delete_record', 'delete_crm_field', 'delete_crm_stage'];
+          if (dangerousTools.includes(toolCall.name)) {
+            // Show confirmation UI
+            await showToolConfirmationDialog(toolCall);
+          } else {
+            // Execute immediately
+            await executeToolCall(toolCall);
+          }
+        }
+      }
+
+      // Add AI response to chat
       const aiMsg: Message = {
         sender: 'ai',
-        text: res.reply,
+        text: displayText,
         time: replyTime,
         action:
           res.nav_route && res.nav_label
@@ -104,6 +276,12 @@ export const AIAssistantDrawer: React.FC<AIAssistantDrawerProps> = ({ isOpen, on
             : undefined,
       };
       setMessages((prev) => [...prev, aiMsg]);
+
+      // Refresh relevant data after tool execution
+      if (toolCalls.length > 0) {
+        refreshDataAfterToolExecution(toolCalls);
+      }
+
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Something went wrong.';
       const errTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -247,6 +425,39 @@ export const AIAssistantDrawer: React.FC<AIAssistantDrawerProps> = ({ isOpen, on
           </div>
         </div>
       </div>
+
+      {/* Confirmation Modal for Dangerous Operations */}
+      {confirmation.visible && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm pointer-events-auto">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 p-6 border border-slate-200 animate-fade-in">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center">
+                <Zap className="w-6 h-6 text-amber-600" />
+              </div>
+              <h2 className="text-lg font-bold text-aura-navy">{confirmation.title}</h2>
+            </div>
+
+            <p className="text-sm text-slate-600 mb-6">{confirmation.message}</p>
+
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={confirmation.onCancel}
+                className="px-4 py-2 rounded-lg bg-slate-100 text-slate-700 font-medium text-sm hover:bg-slate-200 transition-colors flex items-center gap-2"
+              >
+                <X className="w-4 h-4" />
+                Cancel
+              </button>
+              <button
+                onClick={confirmation.onConfirm}
+                className="px-4 py-2 rounded-lg bg-aura-cyan text-aura-navy font-bold text-sm hover:bg-cyan-400 transition-colors flex items-center gap-2"
+              >
+                <Send className="w-4 h-4" />
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

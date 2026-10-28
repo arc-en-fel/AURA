@@ -806,4 +806,34 @@ export const api = {
       },
     );
   },
+
+  // 20. Execute a copilot tool call
+  async executeToolCall(
+    crmId: string,
+    toolCallRequest: {
+      tool_name: string;
+      arguments: Record<string, any>;
+    }
+  ): Promise<any> {
+    if (getUseMockMode()) {
+      // Mock: simulate immediate success
+      await new Promise((r) => setTimeout(r, 300));
+      return {
+        success: true,
+        data: { id: crypto.randomUUID(), created_at: new Date().toISOString() },
+      };
+    }
+
+    return await request<any>(
+      '/copilot/tool-call',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          tool_name: toolCallRequest.tool_name,
+          crm_id: crmId,
+          arguments: toolCallRequest.arguments,
+        }),
+      },
+    );
+  },
 };
