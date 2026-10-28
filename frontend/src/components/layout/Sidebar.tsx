@@ -4,10 +4,7 @@ import {
   LayoutDashboard,
   FolderKanban,
   Database,
-  GitBranch,
   BarChart3,
-  Dna,
-  Settings,
   ChevronLeft,
   ChevronRight,
   Bot,
@@ -33,10 +30,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onCloseMobile })
     { name: 'My CRMs', path: '/crms', icon: FolderKanban },
     { name: 'Build a CRM', path: '/chat-crm', icon: MessageCircle, highlight: true },
     { name: 'Records', path: '/records', icon: Database },
-    { name: 'Workflows', path: '/workflows', icon: GitBranch },
     { name: 'Analytics', path: '/analytics', icon: BarChart3 },
-    { name: 'Evolution Center', path: '/evolution', icon: Dna, badge: 'Core' },
-    { name: 'Settings', path: '/settings', icon: Settings },
   ];
 
   return (
@@ -132,11 +126,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onCloseMobile })
                     }`}
                   />
                   {!isCollapsed && <span className="truncate">{item.name}</span>}
-                  {!isCollapsed && item.badge && (
-                    <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded-full font-bold bg-aura-yellow text-aura-navy uppercase tracking-wider">
-                      {item.badge}
-                    </span>
-                  )}
                 </NavLink>
               );
             })}
