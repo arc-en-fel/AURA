@@ -311,3 +311,55 @@ class ApproveProposalRequest(StrictModel):
 
 class RejectProposalRequest(StrictModel):
     reason: str = Field(min_length=3, max_length=1000)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST-GENERATION CRM EDITING SCHEMAS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AddFieldRequest(StrictModel):
+    """Request to add a new field to a CRM entity."""
+    field_name: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=100)
+    field_type: FieldType = Field(default="text")
+    required: bool = False
+    options: list[str] | None = None
+
+
+class UpdateFieldRequest(StrictModel):
+    """Request to update field properties."""
+    label: str | None = None
+    field_type: FieldType | None = None
+    required: bool | None = None
+    options: list[str] | None = None
+
+
+class DeleteFieldRequest(StrictModel):
+    """Request to delete a field (may include confirmation flag)."""
+    confirm: bool = False
+
+
+class ReorderFieldsRequest(StrictModel):
+    """Request to reorder fields in an entity."""
+    field_order: list[str] = Field(min_length=1)
+
+
+class AddStageRequest(StrictModel):
+    """Request to add a new pipeline stage."""
+    stage_name: str = Field(min_length=1, max_length=100)
+    position: int | None = Field(default=None, ge=0)
+
+
+class UpdateStageRequest(StrictModel):
+    """Request to rename a pipeline stage."""
+    new_stage_name: str = Field(min_length=1, max_length=100)
+
+
+class DeleteStageRequest(StrictModel):
+    """Request to delete a pipeline stage."""
+    confirm: bool = False
+
+
+class ReorderStagesRequest(StrictModel):
+    """Request to reorder pipeline stages."""
+    stage_order: list[str] = Field(min_length=1)
