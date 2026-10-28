@@ -28,6 +28,7 @@ from app.config import get_settings, Settings
 from app.database import CRMRepository
 from app.routers.responses import success_response, error_response
 from app.services.laya_system1 import LayaSystem1
+from app.services.ai_tools import CRMSchemaTools
 
 logger = logging.getLogger(__name__)
 
@@ -342,3 +343,128 @@ async def copilot_chat(
     # Ollama unavailable — use deterministic fallback
     fallback = _deterministic_reply(latest, crm_context)
     return success_response(fallback)
+
+
+# ── CRM Schema Tool Execution ──────────────────────────────────────
+
+class ToolCallRequest(BaseModel):
+    """Request to execute a CRM schema tool."""
+    tool_name: str = Field(
+        ...,
+        description="Name of the tool to execute (e.g., 'add_crm_field')"
+    )
+    crm_id: str = Field(
+        ...,
+        description="The CRM ID to operate on"
+    )
+    arguments: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Tool arguments (field_name, label, field_type, etc.)"
+    )
+
+
+@router.post("/tool-call")
+async def execute_tool_call(
+    body: ToolCallRequest,
+    user_id: CurrentUser,
+):
+    """
+    Execute a CRM schema tool call from an AI assistant.
+
+    This endpoint receives tool invocations from AURA Copilot or other AI systems
+    and executes them with proper authorization checks. All tool calls are validated
+    server-side before execution.
+
+    Args:
+        body: ToolCallRequest with tool_name, crm_id, and arguments
+        user_id: Authenticated user ID (enforces CRM ownership)
+
+    Returns:
+        - 200: Tool execution succeeded, returns updated CRM configuration
+        - 403: User does not own the CRM
+        - 404: CRM not found
+        - 400/422: Invalid tool name or parameters
+        - 500: Internal error during tool execution
+
+    Tool responses include:
+        - success: bool
+        - crm_id: str (if successful)
+        - configuration: dict (if successful)
+        - configuration_version: int (if successful)
+        - error_code: str (if failed)
+        - error_message: str (if failed)
+    """
+    # Map tool names to their handler functions
+    tool_handlers = {
+        "add_crm_field": CRMSchemaTools.add_crm_field,
+        "update_crm_field": CRMSchemaTools.update_crm_field,
+        "delete_crm_field": CRMSchemaTools.delete_crm_field,
+        "add_crm_stage": CRMSchemaTools.add_crm_stage,
+        "delete_crm_stage": CRMSchemaTools.delete_crm_stage,
+        "reorder_crm_fields": CRMSchemaTools.reorder_crm_fields,
+        "reorder_crm_stages": CRMSchemaTools.reorder_crm_stages,
+    }
+
+    # Validate tool name
+    tool_name = body.tool_name.strip().lower()
+    if tool_name not in tool_handlers:
+        return error_response(
+            400,
+            "INVALID_TOOL",
+            f"Unknown tool '{body.tool_name}'. Available tools: {', '.join(tool_handlers.keys())}"
+        )
+
+    # Get the tool handler
+    handler = tool_handlers[tool_name]
+
+    # Execute the tool with owner_id for authorization
+    try:
+        # Pass owner_id to ensure authorization is checked by the tool
+        result = handler(
+            crm_id=body.crm_id,
+            owner_id=str(user_id),
+            **body.arguments
+        )
+
+        # Check if tool execution was successful
+        if isinstance(result, dict) and result.get("success", False):
+            logger.info(
+                "[COPILOT-TOOL] Successfully executed tool '%s' on CRM %s",
+                tool_name,
+                body.crm_id
+            )
+            return success_response(result)
+        elif isinstance(result, dict) and not result.get("success"):
+            # Tool returned an error
+            error_code = result.get("error_code", "TOOL_ERROR")
+            error_msg = result.get("error_message", "Tool execution failed")
+
+            # Map error codes to HTTP status codes
+            status_code = 500  # default
+            if error_code == "NOT_FOUND":
+                status_code = 404
+            elif error_code == "CONFLICT":
+                status_code = 409
+            elif error_code == "VALIDATION_ERROR":
+                status_code = 422
+
+            logger.warning(
+                "[COPILOT-TOOL] Tool '%s' failed with code '%s': %s",
+                tool_name,
+                error_code,
+                error_msg
+            )
+            return error_response(status_code, error_code, error_msg)
+        else:
+            # Unexpected result format
+            logger.error("[COPILOT-TOOL] Unexpected result format from tool '%s'", tool_name)
+            return error_response(500, "INTERNAL_ERROR", "Tool returned unexpected response format")
+
+    except ValueError as exc:
+        error_msg = str(exc)
+        if "unauthorized" in error_msg.lower() or "not found" in error_msg.lower():
+            return error_response(404, "NOT_FOUND", error_msg)
+        return error_response(422, "VALIDATION_ERROR", error_msg)
+    except Exception as exc:
+        logger.exception("[COPILOT-TOOL] Unexpected error executing tool '%s'", tool_name)
+        return error_response(500, "INTERNAL_ERROR", f"Tool execution failed: {str(exc)}")
