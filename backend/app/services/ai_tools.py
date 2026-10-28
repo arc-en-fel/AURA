@@ -29,11 +29,189 @@ logger = logging.getLogger(__name__)
 
 
 class CRMSchemaTools:
-    """Tool implementations for AI-driven CRM schema modifications.
+    """Tool implementations for AI-driven CRM schema modifications and record operations.
     
     These are thin wrappers around backend operations that the AI can call.
     Each tool validates inputs and delegates to CRMSchemaEditor + database.
     """
+
+    # ── Record CRUD Tools ──────────────────────────────────────────
+
+    @staticmethod
+    def create_record(
+        crm_id: str,
+        owner_id: str,
+        entity_name: str,
+        data: dict[str, Any],
+        source: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a new record in the CRM.
+        
+        Args:
+            crm_id: The CRM ID
+            owner_id: The owner user ID (for authorization)
+            entity_name: Name of the entity (e.g., 'lead', 'contact')
+            data: Record field values
+            source: Optional source tag (e.g., 'Website', 'Email', 'Manual')
+            
+        Returns:
+            Created record data as dict
+            
+        Raises:
+            ValueError: If CRM/entity not found or validation fails
+        """
+        repo = CRMRepository()
+        crm = repo.get_crm(crm_id, owner_id)
+        if not crm:
+            return {
+                "success": False,
+                "error_code": "NOT_FOUND",
+                "error_message": "CRM not found or unauthorized"
+            }
+        
+        # Validate entity exists
+        config = crm.get("configuration", {})
+        entities = config.get("entities", [])
+        entity = next((e for e in entities if e["name"] == entity_name), None)
+        
+        if not entity:
+            return {
+                "success": False,
+                "error_code": "INVALID_ENTITY",
+                "error_message": f"Entity '{entity_name}' not found"
+            }
+        
+        # Validate required fields
+        for field in entity.get("fields", []):
+            if field.get("required") and field["name"] not in data:
+                return {
+                    "success": False,
+                    "error_code": "MISSING_REQUIRED_FIELD",
+                    "error_message": f"Required field '{field['name']}' is missing"
+                }
+        
+        try:
+            result = repo.create_record(crm_id, entity_name, data, source=source)
+            logger.info(
+                "[AI-TOOLS] Created record in entity '%s' for CRM %s via AI tool",
+                entity_name,
+                crm_id
+            )
+            return {
+                "success": True,
+                "data": result,
+            }
+        except Exception as exc:
+            logger.exception("Error creating record via AI tool")
+            return {
+                "success": False,
+                "error_code": "INTERNAL_ERROR",
+                "error_message": f"Failed to create record: {str(exc)}",
+            }
+
+    @staticmethod
+    def update_record(
+        crm_id: str,
+        owner_id: str,
+        entity_name: str,
+        record_id: str,
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Update an existing record.
+        
+        Args:
+            crm_id: The CRM ID
+            owner_id: The owner user ID (for authorization)
+            entity_name: Name of the entity
+            record_id: ID of the record to update
+            data: Fields to update (partial update OK)
+            
+        Returns:
+            Updated record data as dict
+            
+        Raises:
+            ValueError: If CRM/record not found
+        """
+        repo = CRMRepository()
+        crm = repo.get_crm(crm_id, owner_id)
+        if not crm:
+            return {
+                "success": False,
+                "error_code": "NOT_FOUND",
+                "error_message": "CRM not found or unauthorized"
+            }
+        
+        try:
+            result = repo.update_record(crm_id, entity_name, record_id, data)
+            logger.info(
+                "[AI-TOOLS] Updated record %s in entity '%s' for CRM %s via AI tool",
+                record_id,
+                entity_name,
+                crm_id
+            )
+            return {
+                "success": True,
+                "data": result,
+            }
+        except Exception as exc:
+            logger.exception("Error updating record via AI tool")
+            return {
+                "success": False,
+                "error_code": "INTERNAL_ERROR",
+                "error_message": f"Failed to update record: {str(exc)}",
+            }
+
+    @staticmethod
+    def delete_record(
+        crm_id: str,
+        owner_id: str,
+        entity_name: str,
+        record_id: str,
+    ) -> dict[str, Any]:
+        """Soft delete a record.
+        
+        Args:
+            crm_id: The CRM ID
+            owner_id: The owner user ID (for authorization)
+            entity_name: Name of the entity
+            record_id: ID of the record to delete
+            
+        Returns:
+            Deletion confirmation as dict
+            
+        Raises:
+            ValueError: If CRM/record not found
+        """
+        repo = CRMRepository()
+        crm = repo.get_crm(crm_id, owner_id)
+        if not crm:
+            return {
+                "success": False,
+                "error_code": "NOT_FOUND",
+                "error_message": "CRM not found or unauthorized"
+            }
+        
+        try:
+            repo.soft_delete_record(crm_id, entity_name, record_id)
+            logger.info(
+                "[AI-TOOLS] Deleted record %s from entity '%s' in CRM %s via AI tool",
+                record_id,
+                entity_name,
+                crm_id
+            )
+            return {
+                "success": True,
+                "data": {"deleted": True, "record_id": record_id},
+            }
+        except Exception as exc:
+            logger.exception("Error deleting record via AI tool")
+            return {
+                "success": False,
+                "error_code": "INTERNAL_ERROR",
+                "error_message": f"Failed to delete record: {str(exc)}",
+            }
+
+    # ── Schema Modification Tools ──────────────────────────────────
 
     @staticmethod
     def add_crm_field(
@@ -595,15 +773,82 @@ COPILOT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "create_record",
+            "description": "Create a new record in the active CRM. Use this when the user asks to add a lead, contact, or other entity record.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_name": {
+                        "type": "string",
+                        "description": "Name of the entity to create a record for (e.g., 'lead', 'contact')",
+                    },
+                    "data": {
+                        "type": "object",
+                        "description": "Record field values as key-value pairs",
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Optional source tag (e.g., 'Website', 'Email', 'Manual')",
+                    },
+                },
+                "required": ["entity_name", "data"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_record",
+            "description": "Update an existing record in the active CRM. Use this when the user wants to change a record's fields.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_name": {
+                        "type": "string",
+                        "description": "Name of the entity",
+                    },
+                    "record_id": {
+                        "type": "string",
+                        "description": "ID of the record to update",
+                    },
+                    "data": {
+                        "type": "object",
+                        "description": "Fields to update (partial update OK)",
+                    },
+                },
+                "required": ["entity_name", "record_id", "data"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_record",
+            "description": "Delete a record from the active CRM. Requires explicit user confirmation before execution.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_name": {
+                        "type": "string",
+                        "description": "Name of the entity",
+                    },
+                    "record_id": {
+                        "type": "string",
+                        "description": "ID of the record to delete",
+                    },
+                },
+                "required": ["entity_name", "record_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "add_crm_field",
             "description": "Add a new field to the CRM's main entity. Use this when the user asks to add a field to their CRM.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "crm_id": {
-                        "type": "string",
-                        "description": "The CRM ID to modify",
-                    },
                     "field_name": {
                         "type": "string",
                         "description": "Machine-readable field name (lowercase, underscores only, e.g., 'assigned_agent')",
@@ -629,7 +874,7 @@ COPILOT_TOOLS = [
                         "description": "For select fields, list of available options (e.g., ['High', 'Medium', 'Low'])",
                     },
                 },
-                "required": ["crm_id", "field_name", "label"],
+                "required": ["field_name", "label"],
             },
         },
     },
@@ -641,10 +886,6 @@ COPILOT_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "crm_id": {
-                        "type": "string",
-                        "description": "The CRM ID",
-                    },
                     "field_name": {
                         "type": "string",
                         "description": "The name of the field to update",
@@ -668,7 +909,7 @@ COPILOT_TOOLS = [
                         "description": "New options for select fields",
                     },
                 },
-                "required": ["crm_id", "field_name"],
+                "required": ["field_name"],
             },
         },
     },
@@ -680,16 +921,12 @@ COPILOT_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "crm_id": {
-                        "type": "string",
-                        "description": "The CRM ID",
-                    },
                     "field_name": {
                         "type": "string",
                         "description": "The name of the field to delete",
                     },
                 },
-                "required": ["crm_id", "field_name"],
+                "required": ["field_name"],
             },
         },
     },
@@ -701,10 +938,6 @@ COPILOT_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "crm_id": {
-                        "type": "string",
-                        "description": "The CRM ID",
-                    },
                     "stage_name": {
                         "type": "string",
                         "description": "Name of the new stage (e.g., 'Negotiation')",
@@ -715,7 +948,7 @@ COPILOT_TOOLS = [
                         "minimum": 0,
                     },
                 },
-                "required": ["crm_id", "stage_name"],
+                "required": ["stage_name"],
             },
         },
     },
@@ -727,16 +960,12 @@ COPILOT_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "crm_id": {
-                        "type": "string",
-                        "description": "The CRM ID",
-                    },
                     "stage_name": {
                         "type": "string",
                         "description": "Name of the stage to delete",
                     },
                 },
-                "required": ["crm_id", "stage_name"],
+                "required": ["stage_name"],
             },
         },
     },
@@ -748,17 +977,13 @@ COPILOT_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "crm_id": {
-                        "type": "string",
-                        "description": "The CRM ID",
-                    },
                     "field_order": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "List of field names in desired order (must include all existing fields)",
                     },
                 },
-                "required": ["crm_id", "field_order"],
+                "required": ["field_order"],
             },
         },
     },
@@ -770,17 +995,13 @@ COPILOT_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "crm_id": {
-                        "type": "string",
-                        "description": "The CRM ID",
-                    },
                     "stage_order": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "List of stage names in desired order (must include all existing stages)",
                     },
                 },
-                "required": ["crm_id", "stage_order"],
+                "required": ["stage_order"],
             },
         },
     },
