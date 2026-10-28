@@ -216,7 +216,7 @@ export const CRMDetailPage: React.FC = () => {
         <Card className="p-4">
           <span className="text-[10px] font-bold uppercase text-slate-400">Conversion Rate</span>
           <p className="text-xl font-bold text-amber-600 mt-1">
-            {analytics ? `${(analytics.conversion_rate * 100).toFixed(1)}%` : '0%'}
+            {analytics && (analytics.conversion_rate !== undefined) ? `${((analytics.conversion_rate ?? 0) * 100).toFixed(1)}%` : '0%'}
           </p>
         </Card>
       </div>

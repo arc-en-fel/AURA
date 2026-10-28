@@ -516,12 +516,13 @@ export const api = {
         sourceCounts[src] = (sourceCounts[src] || 0) + 1;
       });
 
-      const total = leads.length || INITIAL_ANALYTICS.total_leads;
+      const total = leads.length || INITIAL_ANALYTICS.total_leads || 0;
+      const wonCount = won || 0;
       return {
         total_leads: total,
         qualified_leads: qualified || INITIAL_ANALYTICS.qualified_leads,
-        won_leads: won || INITIAL_ANALYTICS.won_leads,
-        conversion_rate: total > 0 ? Number((won / total).toFixed(4)) : 0.0,
+        won_leads: wonCount,
+        conversion_rate: total > 0 ? Number((wonCount / total).toFixed(4)) : 0.0,
         by_source: Object.keys(sourceCounts).length > 0
           ? Object.entries(sourceCounts).map(([value, count]) => ({ value, count }))
           : INITIAL_ANALYTICS.by_source,

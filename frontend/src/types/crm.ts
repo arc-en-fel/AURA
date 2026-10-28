@@ -120,16 +120,26 @@ export interface CreateWorkflowPayload {
 export interface AnalyticsMetricItem {
   value?: string;
   count: number;
+  percentage?: number;
   [key: string]: unknown;
 }
 
 export interface AnalyticsData {
-  total_leads: number;
-  qualified_leads: number;
-  won_leads: number;
-  conversion_rate: number;
+  // Old format (backward compatibility)
+  total_leads?: number;
+  qualified_leads?: number;
+  won_leads?: number;
+  conversion_rate?: number;
+  // New format (dynamic)
+  total_records?: number;
   by_source: AnalyticsMetricItem[];
   by_stage: AnalyticsMetricItem[];
+  schema_info?: {
+    primary_entity_name?: string;
+    pipeline_stages?: string[];
+    stage_field_name?: string | null;
+    source_field_name?: string | null;
+  };
 }
 
 export type EvolutionObjective =

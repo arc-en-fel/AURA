@@ -115,10 +115,10 @@ export const DashboardPage: React.FC = () => {
             </div>
           </div>
           <p className="text-2xl font-bold text-aura-navy mt-3">
-            {analytics ? `${(analytics.conversion_rate * 100).toFixed(1)}%` : '0%'}
+            {analytics && (analytics.conversion_rate !== undefined) ? `${((analytics.conversion_rate ?? 0) * 100).toFixed(1)}%` : '0%'}
           </p>
           <p className="text-[11px] text-slate-400 mt-1">
-            {analytics?.won_leads ?? 0} won deals
+            {(analytics && 'won_leads' in analytics ? (analytics as any).won_leads : 0) ?? 0} won deals
           </p>
         </Card>
 
