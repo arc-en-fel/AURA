@@ -4,9 +4,12 @@ export type FieldType =
   | 'email'
   | 'number'
   | 'date'
+  | 'datetime'
   | 'boolean'
   | 'select'
-  | 'phone';
+  | 'multi_select'
+  | 'phone'
+  | 'url';
 
 export interface CRMField {
   name: string;

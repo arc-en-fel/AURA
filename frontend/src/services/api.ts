@@ -284,6 +284,32 @@ export const api = {
     });
   },
 
+  // 4.5 Update CRM Configuration
+  async updateCRMConfiguration(
+    crmId: string,
+    configuration: CRMConfiguration,
+    expectedVersion?: number
+  ): Promise<CRMSummary> {
+    if (getUseMockMode()) {
+      await new Promise((r) => setTimeout(r, 600));
+      const idx = mockStorage.crms.findIndex((c) => c.crm_id === crmId);
+      if (idx === -1) throw new Error('CRM not found');
+      mockStorage.crms[idx] = {
+        ...mockStorage.crms[idx],
+        configuration,
+        configuration_version: (mockStorage.crms[idx].configuration_version || 0) + 1,
+      };
+      return mockStorage.crms[idx];
+    }
+    return await request<CRMSummary>(`/crm/${crmId}/configuration`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        configuration,
+        expected_version: expectedVersion,
+      }),
+    });
+  },
+
   // 5. List Dynamic Records
   async listRecords(
     crmId: string,

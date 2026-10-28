@@ -15,19 +15,23 @@ import {
   Phone,
   ListFilter,
   FileText,
+  Edit,
 } from 'lucide-react';
 import { api } from '@/services/api';
-import { CRMSummary, AnalyticsData, WorkflowData, EvolutionProposal, FieldType } from '@/types/crm';
+import { CRMSummary, AnalyticsData, WorkflowData, EvolutionProposal, FieldType, CRMConfiguration } from '@/types/crm';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { TableSkeleton } from '@/components/ui/LoadingSkeleton';
 import { useCRM } from '@/context/CRMContext';
+import { useToast } from '@/context/ToastContext';
+import { CRMSchemaEditor } from '@/components/CRMSchemaEditor/CRMSchemaEditor';
 
 export const CRMDetailPage: React.FC = () => {
   const { crmId } = useParams<{ crmId: string }>();
   const navigate = useNavigate();
   const { selectCRM, setActiveEntityByName } = useCRM();
+  const { success, error: toastError } = useToast();
 
   const [crm, setCrm] = useState<CRMSummary | null>(null);
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
@@ -35,6 +39,8 @@ export const CRMDetailPage: React.FC = () => {
   const [proposals, setProposals] = useState<EvolutionProposal[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSavingEdits, setIsSavingEdits] = useState(false);
 
   useEffect(() => {
     if (!crmId) return;
@@ -59,6 +65,24 @@ export const CRMDetailPage: React.FC = () => {
         setIsLoading(false);
       });
   }, [crmId]);
+
+  const handleSaveCRMConfiguration = async (updatedConfig: CRMConfiguration) => {
+    if (!crm) return;
+    
+    try {
+      setIsSavingEdits(true);
+      const updated = await api.updateCRMConfiguration(crm.crm_id, updatedConfig, crm.configuration_version);
+      setCrm(updated);
+      setIsEditing(false);
+      success('CRM configuration updated successfully!');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to update CRM';
+      toastError(msg);
+      throw err; // Re-throw so modal stays open
+    } finally {
+      setIsSavingEdits(false);
+    }
+  };
 
   if (isLoading) {
     return <TableSkeleton rows={6} cols={3} />;
@@ -125,6 +149,14 @@ export const CRMDetailPage: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsEditing(true)}
+            leftIcon={<Edit className="w-4 h-4" />}
+          >
+            Edit CRM
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -304,6 +336,16 @@ export const CRMDetailPage: React.FC = () => {
           ))}
         </div>
       </div>
+
+      {/* CRM Schema Editor Modal */}
+      {isEditing && crm && (
+        <CRMSchemaEditor
+          crm={crm.configuration}
+          onSave={handleSaveCRMConfiguration}
+          onCancel={() => setIsEditing(false)}
+          isLoading={isSavingEdits}
+        />
+      )}
     </div>
   );
 };
