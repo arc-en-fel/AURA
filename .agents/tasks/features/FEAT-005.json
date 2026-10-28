@@ -1,0 +1,43 @@
+{
+  "id": "FEAT-005",
+  "type": "docs",
+  "description": "Update API contract documentation and add design clarifications from design review findings. Resolves HIGH and MEDIUM findings from design-review.md: emphasize router integration as critical fix (H1), clarify batch vs. individual field operations (H2), specify field renaming as unsupported (M1), add type conversion matrix (M2), clarify CRM lifecycle and when editing is available (M3), ensure multi-provider prompt updates (M4).",
+  "status": "pending",
+  "steps": [
+    "Update docs/API_CONTRACTS.md section 1 to add subsection 1.5 'Field and Stage Modification Endpoints': List all 8 new endpoints (POST/PATCH/DELETE fields, POST/PATCH/DELETE stages, reorder endpoints) with descriptions, request/response schemas, status codes.",
+    "Add new request/response schema definitions to docs/API_CONTRACTS.md: AddFieldRequest, UpdateFieldRequest, DeleteFieldRequest, ReorderFieldsRequest, FieldOperationResponse, and corresponding stage schemas. Include validation rules (field name format, type enum, select option constraints).",
+    "Add 'Lifecycle and When Editing is Available' section to docs/API_CONTRACTS.md explaining: (1) GENERATION PHASE (user submits prompt, gets draft in memory), (2) SAVE PHASE (user saves draft to DB, crm_id assigned), (3) ACTIVE PHASE (CRM stored, can be edited). Clarify [Edit CRM] button appears after save, or user can edit draft before saving.",
+    "Add 'Field Operation Semantics' section to docs/API_CONTRACTS.md: Clarify that field operations are applied individually (not batched in MVP). Each PATCH/POST/DELETE is a separate HTTP request that increments configuration_version. Frontend may batch multiple calls sequentially if desired.",
+    "Add 'Field Renaming (MVP Constraint)' section to docs/API_CONTRACTS.md: Document that field machine identifiers (names) are immutable after creation. If user wants a different name, workflow is: delete old field, add new field. Explanation: avoids complex record migration in MVP.",
+    "Add 'Type Conversion Matrix' section to docs/API_CONTRACTS.md section 6 (Record Safety) with table showing safe conversions (text↔email, text↔phone, etc.) and unsafe conversions (select↔number, date↔boolean, etc.). Document that unsafe conversions return 409 CONFLICT.",
+    "Add 'Multi-Provider Field Preservation' section to docs/API_CONTRACTS.md: Document that the FIELD PRESERVATION REQUIREMENT is enforced by all LLM providers (Ollama, Grok, Hugging Face). No provider should drop fields.",
+    "Update docs/API_CONTRACTS.md CRMConfiguration schema documentation to clarify: configuration is stored as JSONB in crms.configuration column. Fields live inside entity definitions. pipeline_stages is array of strings. configuration_version is monotonically increasing.",
+    "Create or update docs/SCHEMA_EDITING.md (new file): Comprehensive guide for developers about the schema editing system. Include: when to use each endpoint, field vs. stage operations, type conversion rules, record safety considerations, authorization checks, error handling.",
+    "Update AGENTS.md to mention the new endpoints in the Architecture section: 'Post-generation editing: PATCH /api/v1/crm/{crm_id}/fields/{field_name}, POST /api/v1/crm/{crm_id}/fields, etc. See API_CONTRACTS.md section 1.5.'",
+    "Add migration guide to docs/MIGRATION.md or docs/API_CONTRACTS.md: If users are upgrading from pre-schema-editing version, document: no database migration needed (JSONB is flexible), configuration_version semantics, new endpoints are opt-in."
+  ],
+  "acceptance_criteria": [
+    "docs/API_CONTRACTS.md includes complete documentation of all 8 new field/stage endpoints",
+    "Request/response schemas documented with examples",
+    "Status codes and error responses documented (including 409 for conflicts)",
+    "Field renaming explicitly noted as unsupported in MVP",
+    "Type conversion matrix included with safe/unsafe conversions",
+    "CRM lifecycle (generation → save → active → edit) clearly explained",
+    "Field operation semantics (individual, not batched) documented",
+    "Multi-provider field preservation requirement documented",
+    "Batch operation guidance provided (if considered in future)",
+    "docs/SCHEMA_EDITING.md created with comprehensive developer guide",
+    "AGENTS.md updated with reference to new endpoints",
+    "No broken links or incomplete references"
+  ],
+  "verification": [
+    "Read docs/API_CONTRACTS.md section 1.5 and verify all 8 endpoints are documented",
+    "Read docs/SCHEMA_EDITING.md and verify it covers type conversions, safety, authorization",
+    "Read AGENTS.md and verify schema editing endpoints are mentioned",
+    "Run: grep -n 'PATCH.*fields' docs/API_CONTRACTS.md (verify endpoints are there)",
+    "Check that all request/response schemas have examples",
+    "Verify no 'TODO' or placeholder text remains in docs"
+  ],
+  "blocked_reason": null,
+  "findings": "This is primarily documentation work that can proceed in parallel with code implementation but should be finalized once backend and frontend are complete. The design review identified specific gaps in API contract clarity that implementation must fill. Documentation must be kept in sync with actual implementation."
+}

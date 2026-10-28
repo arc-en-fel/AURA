@@ -1,0 +1,46 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Implement backend API for post-generation CRM schema editing. Add CRUD endpoints for fields and stages that enforce authorization, validate inputs, increment configuration_version, and account for existing records. This feature enables users to edit generated CRMs without restarting the generation process. All endpoints follow the generic schema design: no hardcoded field names or CRM-specific logic.",
+  "status": "pending",
+  "steps": [
+    "Add request/response schemas to backend/app/schemas/crm.py: AddFieldRequest, UpdateFieldRequest, DeleteFieldRequest, ReorderFieldsRequest (similar for stages). Include validation for field name format (lowercase identifier), type enum, select options (non-empty for select types).",
+    "Implement POST /api/v1/crm/{crm_id}/fields in backend/app/routers/crm.py: Create new endpoint that adds a field to the main entity. Validate ownership, generate machine_key from label, check for duplicates, append field, increment configuration_version, save to DB, return updated CRMConfiguration.",
+    "Implement PATCH /api/v1/crm/{crm_id}/fields/{field_name} in backend/app/routers/crm.py: Update field properties (label, required, options, type for safe conversions only). Validate type conversions against safe conversion matrix from design section 6.4a. Increment version, save, return updated config.",
+    "Implement DELETE /api/v1/crm/{crm_id}/fields/{field_name} in backend/app/routers/crm.py: Check if field has values in existing records (query records table). Return 409 if field is in use, with warning message. Only delete after user confirmation. Increment version, save, return updated config.",
+    "Implement PATCH /api/v1/crm/{crm_id}/fields/reorder in backend/app/routers/crm.py: Accept field_order array, validate it contains exactly the current fields (same set, different order), reorder fields array, increment version, save, return updated config.",
+    "Implement POST /api/v1/crm/{crm_id}/stages in backend/app/routers/crm.py: Add a new pipeline stage at specified position. Validate stage name uniqueness, append or insert, increment version, save, return.",
+    "Implement PATCH /api/v1/crm/{crm_id}/stages/{stage_name} in backend/app/routers/crm.py: Rename stage (MVP constraint: rename only if no records have that stage value). Or provide alternative: delete old, add new.",
+    "Implement DELETE /api/v1/crm/{crm_id}/stages/{stage_name} in backend/app/routers/crm.py: Warn if records have this stage value, require confirmation. Delete stage, increment version, save.",
+    "Implement PATCH /api/v1/crm/{crm_id}/stages/reorder in backend/app/routers/crm.py: Similar to reorder fields, validate and reorder pipeline_stages array.",
+    "Add authorization tests: Verify user A cannot edit/delete user B's CRM (403 or 404). Test ownership check on every endpoint.",
+    "Add field operation tests: test_add_field_success(), test_add_duplicate_field_fails(), test_delete_field_with_records_warns(), test_reorder_fields_success(), test_update_field_type_safe_conversion(), test_update_field_type_unsafe_conversion_fails()",
+    "Add stage operation tests: test_add_stage_success(), test_delete_stage_with_records_warns(), test_reorder_stages_success()",
+    "Update docs/API_CONTRACTS.md with new request/response schemas and endpoint descriptions for all field and stage endpoints"
+  ],
+  "acceptance_criteria": [
+    "POST /api/v1/crm/{crm_id}/fields returns 201 or 200 with updated config",
+    "PATCH /api/v1/crm/{crm_id}/fields/{field_name} returns 200 with updated config",
+    "DELETE /api/v1/crm/{crm_id}/fields/{field_name} returns 200 or 409 (with record warning) as appropriate",
+    "PATCH /api/v1/crm/{crm_id}/fields/reorder returns 200 with reordered config",
+    "All stage endpoints (add, update, delete, reorder) implemented and working",
+    "configuration_version increments on each operation",
+    "Ownership check enforced: user A cannot modify user B's CRM",
+    "All field/stage operations validate inputs (type enum, identifier format, unique names, non-empty options)",
+    "Safe type conversions allowed (text→email, etc.); unsafe conversions return 409",
+    "Field deletion checks for existing records and returns warning",
+    "All 12 new endpoints have passing authorization and functional tests"
+  ],
+  "verification": [
+    "Run: cd backend && python -m pytest backend/tests/ -k 'test_field' -v (verify field endpoint tests pass)",
+    "Run: cd backend && python -m pytest backend/tests/ -k 'test_stage' -v (verify stage endpoint tests pass)",
+    "Run: cd backend && python -m pytest backend/tests/ -k 'test_authorization' -v (verify ownership/auth tests pass)",
+    "Manual test: POST /api/v1/crm/{crm_id}/fields with valid field → 201, config has new field",
+    "Manual test: POST /api/v1/crm/{crm_id}/fields with duplicate name → 409",
+    "Manual test: DELETE /api/v1/crm/{crm_id}/fields/{name} with records using field → 409 with warning",
+    "Manual test: PATCH /api/v1/crm/{crm_id}/fields/{name} with unsafe type change → 409",
+    "Verify: configuration_version increments after each edit"
+  ],
+  "blocked_reason": null,
+  "findings": "FEAT-001 must complete first (field preservation fix). The repository already has the response envelope pattern ({data, meta}) and authorization patterns (CurrentUser dependency, owner_id checks). The database schema already supports JSONB configuration and configuration_version for optimistic locking. The challenge is correctly handling type conversion restrictions and record existence checks."
+}

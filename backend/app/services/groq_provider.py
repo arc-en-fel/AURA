@@ -121,10 +121,19 @@ class GroqAIProvider(GroqProvider):
         from app.services.laya_system1 import LayaSystem1
         from app.schemas.crm import CRMConfiguration
 
-        raw = self.generate_json(
-            "Generate a valid CRM configuration JSON object only. Use schema_version, name, industry, entities with fields, and pipeline_stages. Never emit SQL or code.",
-            prompt,
+        system_prompt = (
+            "Generate a valid CRM configuration JSON object only. Use schema_version, name, industry, entities with fields, and pipeline_stages. Never emit SQL or code.\n\n"
+            "CRITICAL FIELD PRESERVATION REQUIREMENT:\n"
+            "- Every field explicitly mentioned in the user request MUST be included in the generated schema.\n"
+            "- If the user lists 5 fields, the generated JSON must contain exactly 5 fields (or more).\n"
+            "- If the user lists 10 fields, all 10 must appear in the schema.\n"
+            "- If the user lists 15 fields, all 15 must appear in the schema.\n"
+            "- NEVER omit, skip, or consolidate user-requested fields.\n"
+            "- NEVER drop fields from the user's explicit list to reduce JSON size or complexity.\n"
+            "- If uncertain about a field type, use 'text' as the default.\n"
         )
+
+        raw = self.generate_json(system_prompt, prompt)
         repaired = LayaSystem1.repair_crm_configuration(raw, prompt)
         return CRMConfiguration(**repaired).model_dump()
 

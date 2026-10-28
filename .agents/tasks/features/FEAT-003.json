@@ -1,0 +1,50 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Create a generic, reusable CRM schema editor component in React/TypeScript that works for any CRM type without hardcoded field names. The component receives a CRM configuration and allows users to add/edit/delete/reorder fields and stages locally, with save/cancel buttons triggering backend API calls. This component must be independent of CRM type (Sales, Service, Recruitment, etc.).",
+  "status": "pending",
+  "steps": [
+    "Create frontend/src/components/CRMSchemaEditor/CRMSchemaEditor.tsx: Main component that renders tabs (Fields, Stages, Metadata) and manages local editing state. Receives props: crm (CRMConfiguration), onSave (async callback), onCancel, isLoading. Does NOT write to DB on every change; only on explicit save.",
+    "Create frontend/src/components/CRMSchemaEditor/FieldsEditor.tsx sub-component: Renders list of fields with edit/delete buttons and reorder handles (using drag-drop library). Includes [+ Add Field] button that opens AddFieldForm. When user edits a field, opens FieldEditModal. Calls parent's onUpdate() to update local state (not DB).",
+    "Create frontend/src/components/CRMSchemaEditor/AddFieldForm.tsx sub-component: Form with inputs for label, type (dropdown), required (checkbox), options (textarea for select types). Validates on submit (label not empty, type valid, select options non-empty). Returns normalized CanonicalField with machine-generated name from label.",
+    "Create frontend/src/components/CRMSchemaEditor/FieldEditModal.tsx sub-component: Modal for editing existing field (label, type, required, options). Similar validation to AddFieldForm. Returns updated CanonicalField.",
+    "Create frontend/src/components/CRMSchemaEditor/StagesEditor.tsx sub-component: Similar to FieldsEditor but for pipeline_stages (list of strings). Includes [+ Add Stage] button. Supports drag-to-reorder and delete with confirmation.",
+    "Create frontend/src/components/CRMSchemaEditor/AddStageForm.tsx sub-component: Simple form with stage name input and position selector. Validates stage name not empty and not duplicate.",
+    "Create frontend/src/components/CRMSchemaEditor/MetadataEditor.tsx sub-component: Form to edit CRM name and industry. These are non-critical for MVP but included for completeness.",
+    "Implement drag-to-reorder: Choose a React drag-drop library (react-dnd, dnd-kit, or similar) and integrate into FieldsEditor and StagesEditor. Support both mouse and touch. Add accessibility (keyboard shortcuts, ARIA labels).",
+    "Add frontend validation utilities in frontend/src/utils/crmValidation.ts: validateCRMConfiguration(), validateField(), validateSelectOptions(), normalizeLabelToKey(), etc. These run before sending to backend.",
+    "Integrate CRMSchemaEditor into CRMDetailPage: Add [Edit CRM] button on the CRM detail view. When clicked, opens CRMSchemaEditor modal. On save, calls onSave() which sends PATCH/POST requests to backend endpoints from FEAT-002. On success, closes modal and refreshes CRM display. On error, shows error message and keeps modal open.",
+    "Add TypeScript interfaces in frontend/src/types/crm.ts: CanonicalField, CRMConfiguration (ensure alignment with backend Pydantic schemas). Use exact same structure to prevent mismatches.",
+    "Add tests in frontend/src/components/__tests__/CRMSchemaEditor.test.tsx: test_render_fields_list(), test_add_field_validation(), test_delete_field_confirmation(), test_reorder_fields_updates_order(), test_save_calls_backend(), test_error_display(), test_cancel_discards_changes()"
+  ],
+  "acceptance_criteria": [
+    "CRMSchemaEditor component renders tabs (Fields, Stages, Metadata)",
+    "Fields tab displays current fields with edit/delete/reorder controls",
+    "User can add field: [+ Add Field] → form → validates → adds to local state",
+    "User can delete field: [delete button] → confirmation → removes from local state",
+    "User can reorder fields: drag-drop interface works for mouse and touch",
+    "Stages tab (if pipeline_stages exist) displays stages with add/delete/reorder controls",
+    "Metadata tab allows editing CRM name and industry",
+    "Frontend validation prevents invalid input before API call",
+    "Machine key is auto-generated from label correctly (e.g., 'Customer Name' → 'customer_name')",
+    "Select fields require options; form prevents save without options",
+    "Cancel button discards all unsaved changes",
+    "Save button sends update(s) to backend, shows success message, closes editor",
+    "Error from backend is displayed to user; modal remains open for retry",
+    "Component works identically for any CRM type (SalesCRM, ServiceCRM, RecruitmentCRM, etc.) — no hardcoded logic",
+    "All frontend tests pass; no TypeScript errors",
+    "Accessibility: keyboard navigation, ARIA labels, screen reader support for drag-drop"
+  ],
+  "verification": [
+    "Run: cd frontend && npm test (or npm run test:ui) — all CRMSchemaEditor tests pass",
+    "Run: cd frontend && npm run type-check (or tsc --noEmit) — no TypeScript errors",
+    "Manual test: Open CRM detail page, click [Edit CRM], add a field, verify it appears in list",
+    "Manual test: Add field with invalid type or empty select options → form prevents save with error message",
+    "Manual test: Drag field to new position → reorder works",
+    "Manual test: Click [Save Changes] → backend API called (verify in network tab), success message shown",
+    "Manual test: Click [Cancel] → modal closes without saving, CRM unchanged",
+    "Manual test: Generate different CRM types (Sales, Service, Recruitment) and edit each with same component → works for all"
+  ],
+  "blocked_reason": null,
+  "findings": "FEAT-002 must complete first (backend endpoints). Frontend setup already includes TypeScript, React, Tailwind CSS. CanonicalField structure matches CRMField Pydantic schema, so type alignment is straightforward. The key challenge is making the component truly generic (no CRM-type-specific assumptions). Drag-drop library choice affects implementation; recommend dnd-kit for better accessibility support."
+}

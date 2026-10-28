@@ -82,6 +82,15 @@ class OllamaAIProvider(AIProvider):
             "  ],\n"
             '  "pipeline_stages": ["Stage1", "Stage2", "Stage3"]\n'
             "}\n"
+            "CRITICAL FIELD PRESERVATION REQUIREMENT:\n"
+            "- Every field explicitly mentioned in the user request MUST be included in the generated schema.\n"
+            "- If the user lists 5 fields, the generated JSON must contain exactly 5 fields (or more).\n"
+            "- If the user lists 10 fields, all 10 must appear in the schema.\n"
+            "- If the user lists 15 fields, all 15 must appear in the schema.\n"
+            "- NEVER omit, skip, or consolidate user-requested fields.\n"
+            "- NEVER drop fields from the user's explicit list to reduce JSON size or complexity.\n"
+            "- If uncertain about a field type, use 'text' as the default.\n"
+            "\n"
             "Constraints:\n"
             "- Entity names and field names must be lowercase letters and underscores only.\n"
             "- Field types must be one of: text, textarea, email, number, date, boolean, select, phone.\n"
@@ -255,7 +264,10 @@ class OllamaAIProvider(AIProvider):
         return proposal
 
     def chat(self, messages: list[dict[str, str]], system_prompt: str, max_tokens: int = 512) -> dict[str, str]:
-        """Conversational chat endpoint for CRM discovery/interviewing (sync)."""
+        """Conversational chat endpoint for CRM discovery/interviewing (sync).
+        
+        Returns JSON response with 'reply' and 'ready_to_generate' fields extracted from Ollama.
+        """
         # Convert messages to prompt format
         user_prompt = ""
         for msg in messages:
@@ -276,6 +288,7 @@ class OllamaAIProvider(AIProvider):
         payload = {
             "model": self.model,
             "prompt": f"<|im_start|>system\n{json_system_prompt}<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n",
+            "format": "json",  # ← CRITICAL: Force JSON output format
             "stream": False,
             "think": False,
             "options": {
@@ -284,7 +297,7 @@ class OllamaAIProvider(AIProvider):
             },
         }
         
-        logger.info("[AURA-CHAT] calling Ollama endpoint=%s model=%s", endpoint, self.model)
+        logger.info("[AURA-CHAT] calling Ollama endpoint=%s model=%s format=json", endpoint, self.model)
         
         try:
             with httpx.Client(timeout=self.timeout) as client:
@@ -295,7 +308,14 @@ class OllamaAIProvider(AIProvider):
                     if not response_text:
                         raise ValueError("Ollama returned empty response")
                     logger.info("[AURA-CHAT] success response_len=%d", len(response_text))
-                    return {"content": response_text}
+                    # Parse the JSON response
+                    try:
+                        json_response = LayaSystem1.extract_json_payload(response_text)
+                        logger.info("[AURA-CHAT] parsed JSON response with keys: %s", list(json_response.keys()))
+                        return {"content": json.dumps(json_response)}
+                    except Exception as parse_exc:
+                        logger.error("[AURA-CHAT] JSON parse failed: %s, raw response: %s", parse_exc, response_text[:200])
+                        raise ValueError(f"Failed to parse JSON response from Ollama: {parse_exc}")
                 else:
                     logger.error("[AURA-CHAT] HTTP error=%d", resp.status_code)
                     raise ValueError(f"Ollama HTTP {resp.status_code}")
@@ -312,7 +332,7 @@ class OllamaAIProvider(AIProvider):
             max_tokens: Maximum tokens in response
             
         Returns:
-            Dict with 'content' key containing the response text
+            Dict with 'content' key containing the JSON response as string
             
         Raises:
             ValueError: If Ollama is unavailable
@@ -332,6 +352,7 @@ class OllamaAIProvider(AIProvider):
         payload = {
             "model": self.model,
             "prompt": f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n",
+            "format": "json",  # ← CRITICAL: Force JSON output format
             "stream": False,
             "think": False,
             "options": {
@@ -340,7 +361,7 @@ class OllamaAIProvider(AIProvider):
             },
         }
         
-        logger.info("[AURA-CHAT-ASYNC] Ollama endpoint=%s model=%s", endpoint, self.model)
+        logger.info("[AURA-CHAT-ASYNC] Ollama endpoint=%s model=%s format=json", endpoint, self.model)
         
         try:
             async with _async_generation_semaphore:
@@ -352,7 +373,14 @@ class OllamaAIProvider(AIProvider):
                         if not response_text:
                             raise ValueError("Ollama returned empty response")
                         logger.info("[AURA-CHAT-ASYNC] Ollama success, response_length=%d", len(response_text))
-                        return {"content": response_text}
+                        # Parse the JSON response
+                        try:
+                            json_response = LayaSystem1.extract_json_payload(response_text)
+                            logger.info("[AURA-CHAT-ASYNC] parsed JSON response with keys: %s", list(json_response.keys()))
+                            return {"content": json.dumps(json_response)}
+                        except Exception as parse_exc:
+                            logger.error("[AURA-CHAT-ASYNC] JSON parse failed: %s, raw: %s", parse_exc, response_text[:200])
+                            raise ValueError(f"Failed to parse JSON response from Ollama: {parse_exc}")
                     else:
                         logger.error("[AURA-CHAT-ASYNC] Ollama HTTP error status=%d body=%s",
                                    resp.status_code, resp.text)
