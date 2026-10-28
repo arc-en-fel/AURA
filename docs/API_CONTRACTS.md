@@ -174,6 +174,133 @@ Before persisting a record, the backend must:
 - API paths use the machine identifier: `/api/v1/crm/{crm_id}/records/lead` (not `/api/v1/crm/{crm_id}/records/Lead`).
 - The CRM configuration stores both: `{"name": "lead", "label": "Lead", ...}`.
 
+### 1.5 CRM Lifecycle and when editing is available
+
+CRM configurations follow a lifecycle that enables editing at multiple stages:
+
+**1. GENERATION PHASE**
+- User submits natural language prompt: `POST /api/v1/crm/generate`
+- Backend generates draft configuration (in-memory, not saved)
+- Response includes: configuration, field count, warnings, any field preservation analysis
+- User can:
+  - [Save CRM] → Move to SAVE PHASE
+  - [Edit before saving] → Modify draft locally before persisting
+  - [Cancel] → Discard and try again
+
+**2. SAVE PHASE**
+- User (or frontend automatically) calls `POST /api/v1/crm` with configuration
+- Backend persists configuration to database, assigns `crm_id`, sets `configuration_version=1`
+- CRM becomes searchable and accessible via `GET /api/v1/crm/{crm_id}`
+- User can now [Edit CRM] → Move to ACTIVE PHASE
+
+**3. ACTIVE PHASE (CRM in database)**
+- CRM is live in the database with records being created/updated
+- User can still edit the schema using field and stage modification endpoints
+- Records are safe from schema changes (see section 6)
+- User changes trigger `configuration_version` increment for optimistic locking
+
+**When schema editing is available:**
+- Field operations (`POST /fields`, `PATCH /fields/{field_name}`, etc.) are available after `crm_id` is assigned
+- The [Edit CRM] button appears on the CRM detail page for saved CRMs
+- Editing can happen at any time (draft or after activation)
+- Each edit increments `configuration_version` for optimistic concurrency control
+
+### 1.6 Field operation semantics
+
+**Scope of operations:** Field and stage operations are applied individually in this MVP implementation. Each operation is a separate HTTP request to a dedicated endpoint. 
+
+**Batch operations (future):** If the frontend needs to perform multiple changes (add 3 fields, delete 1, reorder), the frontend may:
+- Call the endpoints sequentially for each operation
+- Expect each operation to increment `configuration_version`
+- Handle version conflicts if concurrent edits occur
+
+For future versions, a batch endpoint (`POST /api/v1/crm/{crm_id}/configuration/apply-edits`) may allow atomic multi-operation updates.
+
+**Individual operations (current MVP):**
+- Each endpoint operates independently
+- Backend validates and persists each change atomically
+- `configuration_version` increments after each successful operation
+- Concurrent requests may conflict; use `409 CONFLICT` to signal staleness
+
+### 1.7 Field renaming (MVP constraint)
+
+**Field names are immutable after creation.** Machine identifiers (the `name` field in CRMField) cannot be changed once a CRM is created or a field is added.
+
+**Rationale:** 
+- Renaming fields requires migrating existing record values, which is complex in MVP
+- Frontend can delete + add as a workaround
+- Future versions may support safe renaming with record migration
+
+**Workflow for "renaming" a field:**
+1. User wants to rename field `assigned_agent` to `team_member`
+2. Call `DELETE /api/v1/crm/{crm_id}/fields/assigned_agent`
+3. Call `POST /api/v1/crm/{crm_id}/fields` to add new field `team_member`
+4. Data in `assigned_agent` for existing records is lost (user must re-enter or migrate manually)
+
+This limitation is temporary and will be revisited in post-MVP iterations.
+
+### 1.8 Type conversion rules
+
+When updating a field's type via `PATCH /api/v1/crm/{crm_id}/fields/{field_name}`, only specific conversions are allowed to avoid data loss. The backend enforces these rules with a 409 CONFLICT response if an unsafe conversion is requested.
+
+**Safe conversions** (no data loss; can be performed with existing records):
+| From | To | Notes |
+|------|-----|-------|
+| text | textarea, email, phone, url | String values are compatible |
+| textarea | text, email, phone, url | Single-line conversion is OK if no newlines in data |
+| email | text, url | Email is a subset of text/url |
+| phone | text | Phone is a subset of text |
+| url | text | URL is a subset of text |
+| number | text | Can be displayed as text |
+| date | text | Format as YYYY-MM-DD |
+| datetime | text, date | Text format: ISO 8601; date loses time component |
+| boolean | select | Select with options ["true", "false"] |
+
+**Unsafe conversions** (data loss or incompatibility; blocked with 409):
+| From | To | Reason |
+|------|-----|--------|
+| select | number, text, date | Enum values may not parse as other types |
+| multi_select | * | Comma-separated data has no conversion path |
+| number | date, boolean, select | Numeric values may not map to enum/date/boolean |
+| date | boolean, number, select | Date values have no numeric/boolean meaning |
+| boolean | date, number, email | Boolean values cannot map to complex types |
+
+**Error response for unsafe conversion:**
+```json
+{
+  "error": {
+    "code": "CONFLICT",
+    "message": "Cannot convert field type select → number with existing records. Delete the field and add a new one.",
+    "details": [
+      {"field": "field_type", "issue": "Unsafe conversion with 5 existing records"}
+    ],
+    "request_id": "req_example"
+  }
+}
+```
+
+### 1.9 Multi-provider field preservation requirement
+
+The field preservation guarantee (every explicitly requested field is preserved in the generated schema) must be enforced across all LLM providers. The backend supports multiple providers:
+- Ollama (local)
+- Grok API
+- Hugging Face (or other providers)
+
+**All providers must have the FIELD PRESERVATION REQUIREMENT in their system prompt:**
+
+```
+FIELD PRESERVATION REQUIREMENT (CRITICAL):
+If the user explicitly requests fields in the prompt (e.g., "Full Name, Email, Company, Status, Priority"), 
+you MUST include all of them in the generated CRM schema. Do not drop fields silently.
+For any explicitly mentioned field:
+  1. Extract the field name
+  2. Infer the most appropriate type (text, email, select, etc.)
+  3. Add it to the entities list
+Return the complete set of requested fields.
+```
+
+No provider should have field loss due to provider differences. Integration must verify this requirement in all provider implementations before merge.
+
 ## 2. Response envelope
 
 ### Success
@@ -721,7 +848,415 @@ Auth: required. Request:
 
 Success `200`: returns `status: "rejected"`.
 
-## 6. Common errors
+## 5.17 Field and Stage Modification Endpoints
+
+Post-generation schema editing allows users to modify a CRM's structure after it has been created. All field and stage operations work universally for any CRM type (Sales, Service, Recruitment, Real Estate, etc.). Individual operations are applied separately; each increments `configuration_version`.
+
+### 5.17.1 Add a field
+
+`POST /api/v1/crm/{crm_id}/fields`
+
+Auth: required.
+
+**Path parameters:**
+- `crm_id`: UUID of the CRM.
+
+**Request:**
+```json
+{
+  "field_name": "company",
+  "label": "Company Name",
+  "field_type": "text",
+  "required": false,
+  "options": null
+}
+```
+
+**Request fields:**
+- `field_name` (required, string): Machine identifier for the field (lowercase, letters/digits/underscores).
+- `label` (required, string): Human-readable label.
+- `field_type` (optional, default "text"): One of `text`, `textarea`, `email`, `number`, `date`, `datetime`, `boolean`, `phone`, `url`, `select`, `multi_select`.
+- `required` (optional, default false): Whether field is required.
+- `options` (optional, array of strings): List of options for select/multi_select fields.
+
+**Validation:**
+- Field name must be unique within the entity and not conflict with reserved system field names.
+- If field_type is select or multi_select, options must be provided and non-empty.
+- If options is provided for non-select types, return 422 VALIDATION_ERROR.
+
+**Success `201`:**
+```json
+{
+  "data": {
+    "crm_id": "uuid",
+    "configuration": { /* updated CRMConfiguration */ },
+    "configuration_version": 2
+  },
+  "meta": {"request_id": "req_example"}
+}
+```
+
+**Error responses:**
+- `404 NOT_FOUND`: CRM not found or not authorized.
+- `409 CONFLICT`: Field name already exists in the entity.
+- `422 VALIDATION_ERROR`: Invalid field name, type, or options.
+
+---
+
+### 5.17.2 Update a field
+
+`PATCH /api/v1/crm/{crm_id}/fields/{field_name}`
+
+Auth: required.
+
+**Path parameters:**
+- `crm_id`: UUID of the CRM.
+- `field_name`: Machine identifier of the field to update.
+
+**Request:**
+```json
+{
+  "label": "New Label",
+  "field_type": "email",
+  "required": true,
+  "options": null
+}
+```
+
+**Request fields** (all optional; only provided fields are updated):
+- `label`: New human-readable label.
+- `field_type`: New field type. See section 1.8 for safe/unsafe type conversion rules.
+- `required`: New required state.
+- `options`: New options list (for select/multi_select fields).
+
+**Validation:**
+- If field_type is changed to an unsafe type (see section 1.8), return `409 CONFLICT` with explanation.
+- If options is provided but field_type is not select/multi_select, return 422 VALIDATION_ERROR.
+
+**Success `200`:**
+```json
+{
+  "data": {
+    "crm_id": "uuid",
+    "configuration": { /* updated CRMConfiguration */ },
+    "configuration_version": 2
+  },
+  "meta": {"request_id": "req_example"}
+}
+```
+
+**Error responses:**
+- `404 NOT_FOUND`: CRM not found, not authorized, or field not found.
+- `409 CONFLICT`: Type conversion is unsafe or field name is reserved.
+- `422 VALIDATION_ERROR`: Invalid field name, type, or options.
+
+---
+
+### 5.17.3 Delete a field
+
+`DELETE /api/v1/crm/{crm_id}/fields/{field_name}`
+
+Auth: required.
+
+**Path parameters:**
+- `crm_id`: UUID of the CRM.
+- `field_name`: Machine identifier of the field to delete.
+
+**Query parameters:**
+- `confirm` (optional, default false): Must be `true` to proceed if the field has values in existing records.
+
+**Behavior:**
+- If the field has no records with values, deletion proceeds immediately.
+- If the field has existing record values, return 409 CONFLICT with count of affected records.
+- User must re-call with `?confirm=true` to proceed with data loss.
+- Entity must have at least one field after deletion; cannot delete the last field.
+
+**Success `200`:**
+```json
+{
+  "data": {
+    "crm_id": "uuid",
+    "configuration": { /* updated CRMConfiguration */ },
+    "configuration_version": 2
+  },
+  "meta": {"request_id": "req_example"}
+}
+```
+
+**Error responses:**
+- `404 NOT_FOUND`: CRM not found, not authorized, or field not found.
+- `409 CONFLICT`: Field has existing record values; user must confirm deletion.
+- `422 VALIDATION_ERROR`: Cannot delete the last field in an entity.
+
+---
+
+### 5.17.4 Reorder fields
+
+`PATCH /api/v1/crm/{crm_id}/fields/reorder`
+
+Auth: required.
+
+**Path parameters:**
+- `crm_id`: UUID of the CRM.
+
+**Request:**
+```json
+{
+  "field_order": ["full_name", "email", "company", "status"]
+}
+```
+
+**Request fields:**
+- `field_order` (required, array of strings): Ordered list of field names. Must contain exactly the current fields in a new order.
+
+**Validation:**
+- field_order must contain all and only the current field names in the entity.
+- Duplicate field names or missing fields result in 422 VALIDATION_ERROR.
+
+**Success `200`:**
+```json
+{
+  "data": {
+    "crm_id": "uuid",
+    "configuration": { /* updated CRMConfiguration */ },
+    "configuration_version": 2
+  },
+  "meta": {"request_id": "req_example"}
+}
+```
+
+**Error responses:**
+- `404 NOT_FOUND`: CRM not found or not authorized.
+- `422 VALIDATION_ERROR`: field_order mismatch (missing or extra fields).
+
+---
+
+### 5.17.5 Add a pipeline stage
+
+`POST /api/v1/crm/{crm_id}/stages`
+
+Auth: required.
+
+**Path parameters:**
+- `crm_id`: UUID of the CRM.
+
+**Request:**
+```json
+{
+  "stage_name": "Negotiation",
+  "position": 3
+}
+```
+
+**Request fields:**
+- `stage_name` (required, string): Name of the new stage.
+- `position` (optional, integer): Index at which to insert the stage (0-indexed). If omitted, appends to end.
+
+**Validation:**
+- stage_name must be unique among pipeline stages.
+- position must be between 0 and current stage count (inclusive).
+
+**Success `201`:**
+```json
+{
+  "data": {
+    "crm_id": "uuid",
+    "configuration": { /* updated CRMConfiguration */ },
+    "configuration_version": 2
+  },
+  "meta": {"request_id": "req_example"}
+}
+```
+
+**Error responses:**
+- `404 NOT_FOUND`: CRM not found or not authorized.
+- `409 CONFLICT`: Stage name already exists.
+- `422 VALIDATION_ERROR`: Invalid position or stage name.
+
+---
+
+### 5.17.6 Update a pipeline stage
+
+`PATCH /api/v1/crm/{crm_id}/stages/{stage_name}`
+
+Auth: required.
+
+**Path parameters:**
+- `crm_id`: UUID of the CRM.
+- `stage_name`: Current name of the stage to rename.
+
+**Request:**
+```json
+{
+  "new_stage_name": "Advanced Negotiation"
+}
+```
+
+**Request fields:**
+- `new_stage_name` (required, string): New name for the stage.
+
+**Validation:**
+- new_stage_name must be unique among pipeline stages (excluding the old name).
+- Note: Existing records with the old stage value are NOT migrated. This is a future enhancement.
+
+**Success `200`:**
+```json
+{
+  "data": {
+    "crm_id": "uuid",
+    "configuration": { /* updated CRMConfiguration */ },
+    "configuration_version": 2
+  },
+  "meta": {"request_id": "req_example"}
+}
+```
+
+**Error responses:**
+- `404 NOT_FOUND`: CRM not found, not authorized, or stage not found.
+- `409 CONFLICT`: New stage name already exists.
+- `422 VALIDATION_ERROR`: Invalid stage name.
+
+---
+
+### 5.17.7 Delete a pipeline stage
+
+`DELETE /api/v1/crm/{crm_id}/stages/{stage_name}`
+
+Auth: required.
+
+**Path parameters:**
+- `crm_id`: UUID of the CRM.
+- `stage_name`: Name of the stage to delete.
+
+**Query parameters:**
+- `confirm` (optional, default false): Must be `true` to proceed if the stage has records with that stage value.
+
+**Behavior:**
+- If no records have the stage value, deletion proceeds immediately.
+- If records exist with this stage value, return 409 CONFLICT with count.
+- User must re-call with `?confirm=true` to proceed with data loss.
+- At least one stage must remain after deletion.
+
+**Success `200`:**
+```json
+{
+  "data": {
+    "crm_id": "uuid",
+    "configuration": { /* updated CRMConfiguration */ },
+    "configuration_version": 2
+  },
+  "meta": {"request_id": "req_example"}
+}
+```
+
+**Error responses:**
+- `404 NOT_FOUND`: CRM not found, not authorized, or stage not found.
+- `409 CONFLICT`: Stage has existing record values; user must confirm deletion.
+- `422 VALIDATION_ERROR`: Cannot delete the last stage.
+
+---
+
+### 5.17.8 Reorder pipeline stages
+
+`PATCH /api/v1/crm/{crm_id}/stages/reorder`
+
+Auth: required.
+
+**Path parameters:**
+- `crm_id`: UUID of the CRM.
+
+**Request:**
+```json
+{
+  "stage_order": ["New", "Negotiation", "Proposal", "Won", "Lost"]
+}
+```
+
+**Request fields:**
+- `stage_order` (required, array of strings): Ordered list of stage names. Must contain exactly the current stages in a new order.
+
+**Validation:**
+- stage_order must contain all and only the current stage names.
+- Duplicate or missing stages result in 422 VALIDATION_ERROR.
+
+**Success `200`:**
+```json
+{
+  "data": {
+    "crm_id": "uuid",
+    "configuration": { /* updated CRMConfiguration */ },
+    "configuration_version": 2
+  },
+  "meta": {"request_id": "req_example"}
+}
+```
+
+**Error responses:**
+- `404 NOT_FOUND`: CRM not found or not authorized.
+- `422 VALIDATION_ERROR`: stage_order mismatch (missing or extra stages).
+
+## 6. Record Safety and Schema Evolution
+
+### 6.1 Adding a field
+
+**Safe operation.** New fields have a `null` value for all existing records. No data is lost or migrated.
+
+- Existing records continue to work unchanged.
+- The new field appears in `GET /api/v1/crm/{crm_id}/records/{entity_name}/{record_id}` with `null` value.
+- When creating new records, users can populate the new field.
+- No migration of existing records is needed.
+
+### 6.2 Updating field properties (label, required, type, options)
+
+**Mostly safe, with caveats:**
+
+- **Changing label:** Safe. No data affected.
+- **Changing required state:** Safe. Does not alter existing records; only affects validation for new records.
+- **Changing field type (with conversion rules):** Safe only for allowed conversions (see section 1.8). Unsafe conversions are blocked with 409 CONFLICT.
+- **Adding options to a select field:** Safe. Only affects validation for new records.
+- **Removing options from a select field:** Potentially unsafe. Existing records may have values matching the removed options. The backend does not block this in MVP but future versions may warn. Users are responsible for data integrity.
+
+### 6.3 Deleting a field
+
+**Destructive operation.** Field data is lost for all records.
+
+- If the field has no values in existing records, deletion is immediate.
+- If the field has values, return 409 CONFLICT with record count. User must explicitly confirm with `?confirm=true`.
+- Once deleted, the field is removed from the configuration. `GET` operations return records without the field key.
+- Records are not modified; the field is simply not present anymore.
+- This operation is permanent for the purposes of MVP; future versions may support soft-delete or archival.
+
+### 6.4 Renaming a field
+
+**Not supported in MVP.** See section 1.7. Use delete + add workflow.
+
+### 6.5 Reordering fields or stages
+
+**Safe operation.** Only the presentation order changes. No record data affected.
+
+### 6.6 Adding a pipeline stage
+
+**Safe operation.** Existing records with other stage values continue unchanged. New records can be created with the new stage.
+
+### 6.7 Deleting a pipeline stage
+
+**Potentially destructive.** Records with the deleted stage value are not automatically reassigned.
+
+- If no records have the stage value, deletion is immediate.
+- If records exist with this stage, return 409 CONFLICT with count. User must confirm with `?confirm=true`.
+- After deletion, records retain their old stage value in the `data` JSONB column, but the stage is no longer in the CRM configuration. Queries may need to handle "orphaned" stage values.
+- Future versions may support stage reassignment (migrate old stage → new stage for all records).
+
+### 6.8 Renaming a pipeline stage
+
+**Partially destructive in MVP.** Stage name is updated in configuration but existing records are not migrated.
+
+- Records that had the old stage value retain that value in the JSONB `data` column.
+- The record's stage is now considered "orphaned" (not in the current configuration).
+- UI may show stage value as unmapped or unknown.
+- Future versions may support automatic record migration.
+
+## 7. Common errors
 
 - `400 BAD_REQUEST`: invalid business operation.
 - `401 UNAUTHENTICATED`: token missing or invalid.
@@ -734,7 +1269,7 @@ Success `200`: returns `status: "rejected"`.
 - `502 AI_PROVIDER_ERROR`: upstream model provider failed.
 - `500 INTERNAL_ERROR`: unexpected failure; do not expose internals.
 
-## 7. Implementation order
+## 8. Implementation order
 
 1. Implement shared Pydantic models and the success/error envelope.
 2. Implement Supabase JWT verification and CRM ownership checks.
@@ -744,7 +1279,7 @@ Success `200`: returns `status: "rejected"`.
 6. Implement analytics and evolution proposals with human approval.
 7. Generate and inspect `/openapi.json`; update this document and tests in the same PR when contracts change.
 
-## 8. Definition of done
+## 9. Definition of done
 
 - Requests and responses match the documented models.
 - All CRM-scoped endpoints enforce authentication and ownership.
@@ -755,6 +1290,34 @@ Success `200`: returns `status: "rejected"`.
 - Tests cover success, validation failure, unauthorized access, missing resources and version conflicts.
 - `docs/API_CONTRACTS.md` and generated OpenAPI documentation stay aligned.
 
-## 9. Implementation status
+## 10. Implementation status
 
-Features described in this document are **specified but not yet implemented** unless explicitly noted otherwise. When a feature is implemented, update this section with the implementation date and relevant PR/commit reference.
+**POST-GENERATION CRM EDITING ENDPOINTS (FEAT-002 & FEAT-005):**
+
+The following field and stage modification endpoints are implemented in `backend/app/routers/crm.py`:
+
+- ✅ `POST /api/v1/crm/{crm_id}/fields` — Add field
+- ✅ `PATCH /api/v1/crm/{crm_id}/fields/{field_name}` — Update field
+- ✅ `DELETE /api/v1/crm/{crm_id}/fields/{field_name}` — Delete field
+- ✅ `PATCH /api/v1/crm/{crm_id}/fields/reorder` — Reorder fields
+- ✅ `POST /api/v1/crm/{crm_id}/stages` — Add stage
+- ✅ `PATCH /api/v1/crm/{crm_id}/stages/{stage_name}` — Update stage
+- ✅ `DELETE /api/v1/crm/{crm_id}/stages/{stage_name}` — Delete stage
+- ✅ `PATCH /api/v1/crm/{crm_id}/stages/reorder` — Reorder stages
+
+Backend service for field operations: `backend/app/services/crm_editor.py` with methods for each operation.
+
+**FIELD PRESERVATION (FEAT-001):**
+
+- ✅ `FieldExtractor` service: extracts user-requested fields from prompts
+- ✅ `SchemaPreservation` service: validates field count and repairs missing fields
+- ⚠️ Integration into `POST /api/v1/crm/generate`: Requires updating the endpoint to call `SchemaPreservation.validate_and_repair_schema()` and `FieldExtractor.extract_fields_from_prompt()` in sequence
+
+**Documentation status (FEAT-005):**
+
+- ✅ This file (API_CONTRACTS.md) updated with field/stage operation details, lifecycle, and type conversion matrix
+- ✅ Lifecycle clarifications (sections 1.5–1.9)
+- ✅ Type conversion matrix (section 1.8)
+- ✅ Record safety guide (section 6)
+- ⏳ SCHEMA_EDITING.md — Developer guide for schema editing system
+- ⏳ AGENTS.md — Updated with schema editing endpoint references
