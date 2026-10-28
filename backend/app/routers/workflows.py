@@ -7,6 +7,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 from uuid import UUID
 
@@ -20,6 +21,8 @@ from app.schemas.crm import (
     CreateWorkflowRequest,
 )
 from app.services.validation import find_entity
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/crm/{crm_id}", tags=["Workflows & Analytics"])
 
@@ -98,7 +101,29 @@ async def list_workflows(crm_id: UUID, user_id: CurrentUser):
 
 @router.get("/analytics")
 async def get_analytics(crm_id: UUID, user_id: CurrentUser):
-    """Get CRM analytics. Resolves lead entity and stage field from configuration."""
+    """
+    Get CRM analytics dynamically derived from the active CRM's configuration.
+    
+    Handles edge cases:
+    - Empty pipeline_stages: return empty by_stage array
+    - No stage field: return empty by_stage array
+    - Orphaned stage values: include in counts
+    - No source field: return empty by_source array
+    - Zero records: return 0 counts with 0% percentages
+    
+    Returns:
+    {
+        "total_records": int,
+        "by_stage": [{"value": str, "count": int, "percentage": float}, ...],
+        "by_source": [{"value": str, "count": int, "percentage": float}, ...],
+        "schema_info": {
+            "primary_entity_name": str,
+            "pipeline_stages": [str, ...],
+            "stage_field_name": str | None,
+            "source_field_name": str | None
+        }
+    }
+    """
     repo = _get_repo()
     crm = repo.get_crm(str(crm_id), user_id)
     if not crm:
@@ -106,65 +131,82 @@ async def get_analytics(crm_id: UUID, user_id: CurrentUser):
 
     config = CRMConfiguration(**crm["configuration"])
 
-    # Find lead entity (first entity, or one named 'lead')
-    lead_entity = find_entity(config, "lead")
-    if not lead_entity:
-        lead_entity = config.entities[0] if config.entities else None
-
-    if not lead_entity:
+    # Get primary entity (first entity in configuration)
+    if not config.entities:
         return success_response({
-            "total_leads": 0,
-            "qualified_leads": 0,
-            "won_leads": 0,
-            "conversion_rate": 0.0,
-            "by_source": [],
+            "total_records": 0,
             "by_stage": [],
+            "by_source": [],
+            "schema_info": {
+                "primary_entity_name": None,
+                "pipeline_stages": [],
+                "stage_field_name": None,
+                "source_field_name": None,
+            }
         })
 
-    entity_name = lead_entity.name
+    primary_entity = config.entities[0]
+    entity_name = primary_entity.name
 
-    # Find stage/status field
-    stage_field = None
-    source_field = None
-    for f in lead_entity.fields:
-        if f.name in ("status", "stage") and f.type == "select":
-            stage_field = f
-        if f.name == "source" and f.type == "select":
-            source_field = f
+    # Get pipeline stages from configuration (user-defined)
+    pipeline_stages = config.pipeline_stages if config.pipeline_stages else []
+
+    # Find stage field (typically "status" or "stage" with type "select")
+    stage_field_name = None
+    for field in primary_entity.fields:
+        if field.type == "select" and field.name in ("status", "stage"):
+            stage_field_name = field.name
+            break
+
+    # Find source field (typically "source" with type "select")
+    source_field_name = None
+    for field in primary_entity.fields:
+        if field.name == "source":
+            source_field_name = field.name
+            break
 
     try:
-        total_leads = repo.count_records(str(crm_id), entity_name)
+        # Query: Total records
+        total_records = repo.count_records(str(crm_id), entity_name)
 
-        qualified = 0
-        won = 0
+        # Query: Records by stage
         by_stage: list[dict[str, Any]] = []
+        if stage_field_name:
+            stage_counts = repo.count_records_by_field(str(crm_id), entity_name, stage_field_name)
+            # Add percentage for each stage
+            for entry in stage_counts:
+                count = entry.get("count", 0)
+                percentage = (count / total_records * 100) if total_records > 0 else 0.0
+                by_stage.append({
+                    "value": entry.get("value", "Unassigned"),
+                    "count": count,
+                    "percentage": round(percentage, 1),
+                })
+
+        # Query: Records by source
         by_source: list[dict[str, Any]] = []
-
-        if stage_field and stage_field.options:
-            by_stage = repo.count_records_by_field(str(crm_id), entity_name, stage_field.name)
-            # Determine qualified/won from pipeline stages or options
-            qualified_stages = {"Qualified", "qualified"}
-            won_stages = {"Won", "won", "Closed Won", "closed_won"}
-
-            for entry in by_stage:
-                val = entry.get("value", "")
-                if val in qualified_stages:
-                    qualified = entry.get("count", 0)
-                if val in won_stages:
-                    won = entry.get("count", 0)
-
-        if source_field:
-            by_source = repo.count_records_by_field(str(crm_id), entity_name, source_field.name)
-
-        conversion_rate = won / total_leads if total_leads > 0 else 0.0
+        if source_field_name:
+            source_counts = repo.count_records_by_field(str(crm_id), entity_name, source_field_name)
+            for entry in source_counts:
+                count = entry.get("count", 0)
+                percentage = (count / total_records * 100) if total_records > 0 else 0.0
+                by_source.append({
+                    "value": entry.get("value", "Direct"),
+                    "count": count,
+                    "percentage": round(percentage, 1),
+                })
 
         return success_response({
-            "total_leads": total_leads,
-            "qualified_leads": qualified,
-            "won_leads": won,
-            "conversion_rate": round(conversion_rate, 4),
-            "by_source": by_source,
+            "total_records": total_records,
             "by_stage": by_stage,
+            "by_source": by_source,
+            "schema_info": {
+                "primary_entity_name": entity_name,
+                "pipeline_stages": pipeline_stages,
+                "stage_field_name": stage_field_name,
+                "source_field_name": source_field_name,
+            }
         })
-    except Exception:
+    except Exception as exc:
+        logger.exception("Error computing analytics")
         return error_response(500, "INTERNAL_ERROR", "Failed to compute analytics.")
