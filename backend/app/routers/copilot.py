@@ -63,7 +63,12 @@ class CopilotRequest(BaseModel):
 # ── System prompt builder ──────────────────────────────────────────
 
 def _build_system_prompt(crm_context: dict[str, Any] | None) -> str:
-    """Build system prompt with action detection and tool schemas."""
+    """Build system prompt with action detection and tool schemas.
+    
+    CRITICAL FIX (RC-002, RC-003): Dynamically inject actual entity names from CRM configuration
+    instead of using hardcoded examples like 'lead', 'customer', etc. This ensures the LLM
+    generates tool calls with valid entity names that actually exist in the CRM.
+    """
     routes_text = "\n".join(f"  - {k}: {v}" for k, v in AURA_ROUTES.items())
 
     base = (
@@ -84,24 +89,30 @@ def _build_system_prompt(crm_context: dict[str, Any] | None) -> str:
         "- User says: 'Show me...', 'Explain...', 'What is...', 'How do I...'\n"
         "- Action: Answer with schema info or explanation; do NOT generate tool call\n\n"
         
+        "# ENTITY RESOLUTION (CRITICAL)\n"
+        "When the user asks to create or modify a record, you MUST match their requested entity\n"
+        "against the VALID ENTITY NAMES list below. Rules:\n"
+        "1. If the user's request clearly matches ONE entity name, use it.\n"
+        "2. If the user's request is ambiguous or matches MULTIPLE entities, ask which one.\n"
+        "3. If the user's request matches NO entities, explain the mismatch and suggest available entities.\n"
+        "4. NEVER use an entity name that is NOT in the VALID ENTITY NAMES list.\n"
+        "5. NEVER invent or assume entity names (e.g., do not assume 'lead' exists unless listed).\n\n"
+        
         "# TOOL CALLING FORMAT\n"
         "When you need to execute an action, generate a JSON tool call in this format:\n"
         "TOOL_CALL: {\"name\": \"tool_name\", \"arguments\": {arg1: value1, arg2: value2}}\n\n"
-        "Examples:\n"
-        "- Create record: TOOL_CALL: {\"name\": \"create_record\", \"arguments\": {\"entity_name\": \"lead\", \"data\": {\"name\": \"John\", \"email\": \"john@example.com\"}}}\n"
-        "- Update record: TOOL_CALL: {\"name\": \"update_record\", \"arguments\": {\"entity_name\": \"lead\", \"record_id\": \"uuid-here\", \"data\": {\"status\": \"qualified\"}}}\n"
-        "- Delete record: TOOL_CALL: {\"name\": \"delete_record\", \"arguments\": {\"entity_name\": \"lead\", \"record_id\": \"uuid-here\"}}\n"
-        "- Add field: TOOL_CALL: {\"name\": \"add_crm_field\", \"arguments\": {\"field_name\": \"country\", \"label\": \"Country\", \"field_type\": \"text\"}}\n"
-        "- Add stage: TOOL_CALL: {\"name\": \"add_crm_stage\", \"arguments\": {\"stage_name\": \"Negotiation\"}}\n\n"
+        "Important: The entity_name argument MUST be one of the VALID ENTITY NAMES below.\n\n"
+        "Example format (do NOT copy entity names from here; use the actual valid ones):\n"
+        "- TOOL_CALL: {\"name\": \"create_record\", \"arguments\": {\"entity_name\": \"<valid_entity_name>\", \"data\": {...}}}\n\n"
         
         "# AVAILABLE TOOLS\n"
         "## Record Actions\n"
-        "- create_record(entity_name, data, source?): Create a new record\n"
-        "- update_record(entity_name, record_id, data): Update existing record\n"
-        "- delete_record(entity_name, record_id): Delete a record (dangerous — requires user confirmation)\n\n"
+        "- create_record(entity_name, data, source?): Create a new record. entity_name MUST be from VALID ENTITY NAMES.\n"
+        "- update_record(entity_name, record_id, data): Update existing record. entity_name MUST be from VALID ENTITY NAMES.\n"
+        "- delete_record(entity_name, record_id): Delete a record (dangerous — requires user confirmation). entity_name MUST be from VALID ENTITY NAMES.\n\n"
         "## Field Actions\n"
-        "- add_crm_field(field_name, label, field_type, required?, options?): Add field\n"
-        "- update_crm_field(field_name, label?, field_type?, required?, options?): Update field\n"
+        "- add_crm_field(field_name, label, field_type, required?, options?): Add field to the CRM\n"
+        "- update_crm_field(field_name, label?, field_type?, required?, options?): Update field properties\n"
         "- delete_crm_field(field_name): Delete field (dangerous)\n\n"
         "## Stage Actions\n"
         "- add_crm_stage(stage_name, position?): Add pipeline stage\n"
@@ -114,19 +125,34 @@ def _build_system_prompt(crm_context: dict[str, Any] | None) -> str:
         "- If mentioning navigation, use format: [NAV: route_key | Button Label]\n"
         "- Base answers on the CRM context. Do NOT invent fields, stages, or data.\n"
         "- For dangerous operations (delete, schema changes), always generate a tool call — the frontend will ask user for confirmation.\n"
-        "- Never execute code or SQL.\n\n"
+        "- Never execute code or SQL.\n"
+        "- NEVER use an entity_name that is not in the VALID ENTITY NAMES list below.\n\n"
         f"Available AURA routes:\n{routes_text}\n"
     )
 
     if crm_context:
         config = crm_context.get("configuration", {})
         entities = config.get("entities", [])
+        
+        # RC-003: Build explicit VALID ENTITY NAMES section for LLM clarity
+        if entities:
+            valid_entity_names = ", ".join(
+                f"{e['name']} ({e['label']})" for e in entities
+            )
+            base += f"\nVALID ENTITY NAMES: {valid_entity_names}\n"
+        else:
+            base += "\nVALID ENTITY NAMES: (no entities defined)\n"
+        
+        # Build entity details with required fields highlighted
         entity_summary = []
-        for e in entities[:5]:  # cap at 5 to control prompt size
+        for e in entities[:10]:  # cap at 10 to control prompt size
             field_names = [f["name"] for f in e.get("fields", [])[:8]]
+            required_fields = [f["name"] for f in e.get("fields", []) if f.get("required", False)]
             entity_summary.append(
                 f"  - {e['label']} ({e['name']}): fields = {', '.join(field_names)}"
             )
+            if required_fields:
+                entity_summary.append(f"    (required: {', '.join(required_fields)})")
 
         stages = config.get("pipeline_stages", [])
         workflows = crm_context.get("workflows", [])
@@ -143,7 +169,7 @@ def _build_system_prompt(crm_context: dict[str, Any] | None) -> str:
             f"Industry: {config.get('industry', 'Unknown')}\n"
             f"Configuration version: {crm_context.get('configuration_version', 1)}\n"
             f"Pipeline stages: {' → '.join(stages) if stages else 'None defined'}\n"
-            f"Entities:\n" + ("\n".join(entity_summary) if entity_summary else "  None") + "\n"
+            f"Entity Details:\n" + ("\n".join(entity_summary) if entity_summary else "  None") + "\n"
             f"Workflows ({len(workflows)} total):\n"
             + ("\n".join(wf_summary) if wf_summary else "  None defined") + "\n"
         )
@@ -676,6 +702,68 @@ class ToolCallRequest(BaseModel):
     )
 
 
+def _validate_entity_name(crm_id: str, owner_id: str, entity_name: str | None, tool_name: str) -> tuple[bool, str | dict]:
+    """
+    Validate that entity_name exists in the CRM configuration (RC-004).
+    
+    For record-related tools, verify the entity exists. If not, return error with available entities.
+    
+    Returns:
+        (is_valid, error_or_entity_name)
+        - If valid: (True, entity_name)
+        - If invalid: (False, error_dict)
+    """
+    # These tools require entity validation
+    record_tools = {"create_record", "update_record", "delete_record"}
+    
+    if tool_name not in record_tools:
+        # Non-record tools don't require entity validation
+        return True, entity_name or ""
+    
+    if not entity_name:
+        return False, {
+            "error_code": "VALIDATION_ERROR",
+            "error_message": "entity_name is required for record operations"
+        }
+    
+    # Fetch CRM to validate entity exists
+    repo = CRMRepository()
+    crm = repo.get_crm(crm_id, owner_id)
+    if not crm:
+        return False, {
+            "error_code": "NOT_FOUND",
+            "error_message": f"CRM '{crm_id}' not found or unauthorized"
+        }
+    
+    config = crm.get("configuration", {})
+    entities = config.get("entities", [])
+    
+    if not entities:
+        return False, {
+            "error_code": "INVALID_ENTITY",
+            "error_message": f"No entities defined in this CRM. Cannot create records."
+        }
+    
+    # Try to find a matching entity (exact match on name or normalized match on label)
+    norm = str(entity_name).lower().strip().replace(" ", "_").replace("-", "_")
+    for e in entities:
+        e_name = str(e.get("name", "")).lower().strip().replace(" ", "_").replace("-", "_")
+        e_label = str(e.get("label", "")).lower().strip().replace(" ", "_").replace("-", "_")
+        if e_name == norm or e_label == norm or e.get("name") == entity_name:
+            # Found a match; return the canonical entity name
+            return True, e.get("name", entity_name)
+    
+    # No match found; return error with available entities
+    available = [f"{e.get('name')} ({e.get('label')})" for e in entities]
+    return False, {
+        "error_code": "INVALID_ENTITY",
+        "error_message": (
+            f"Entity '{entity_name}' not found in this CRM. "
+            f"Available entities: {', '.join(available)}"
+        )
+    }
+
+
 @router.post("/tool-call")
 async def execute_tool_call(
     body: ToolCallRequest,
@@ -687,6 +775,9 @@ async def execute_tool_call(
     This endpoint receives tool invocations from AURA Copilot or other AI systems
     and executes them with proper authorization checks. All tool calls are validated
     server-side before execution.
+    
+    RC-004 FIX: Entity names are validated before tool execution. Invalid entity names
+    are rejected with a 400 error listing available entities.
 
     Args:
         body: ToolCallRequest with tool_name, crm_id, and arguments
@@ -733,6 +824,16 @@ async def execute_tool_call(
             "INVALID_TOOL",
             f"Unknown tool '{body.tool_name}'. Available tools: {', '.join(tool_handlers.keys())}"
         )
+
+    # RC-004: Validate entity_name if this is a record operation
+    entity_name = body.arguments.get("entity_name")
+    is_valid, result = _validate_entity_name(body.crm_id, str(user_id), entity_name, tool_name)
+    if not is_valid:
+        return error_response(400, result["error_code"], result["error_message"])
+    
+    # Update arguments with the canonical entity name if it was normalized
+    if tool_name in {"create_record", "update_record", "delete_record"}:
+        body.arguments["entity_name"] = result
 
     # Get the tool handler
     handler = tool_handlers[tool_name]

@@ -39,20 +39,35 @@ class CRMSchemaTools:
 
     @staticmethod
     def _resolve_entity(config: dict[str, Any], entity_identifier: str | None) -> dict[str, Any] | None:
-        """Resolve an entity from configuration by name, id, or label, or fallback to first entity."""
+        """
+        Resolve an entity from configuration by name, id, or label.
+        
+        RC-001 FIX: Returns None if no match found instead of silently falling back to entities[0].
+        This ensures explicit entity selection rather than silent fallback to wrong entity.
+        
+        Args:
+            config: CRM configuration dict
+            entity_identifier: Entity name, ID, or label to resolve
+            
+        Returns:
+            Resolved entity dict, or None if no match found or no entities available
+        """
         entities = config.get("entities", [])
         if not entities:
             return None
         if not entity_identifier:
-            return entities[0]
+            return None
+        
         norm = str(entity_identifier).lower().strip().replace(" ", "_").replace("-", "_")
         for e in entities:
             name = str(e.get("name", "")).lower().strip().replace(" ", "_").replace("-", "_")
             label = str(e.get("label", "")).lower().strip().replace(" ", "_").replace("-", "_")
             if name == norm or label == norm:
                 return e
-        # If no match but only one entity exists, use it
-        return entities[0]
+        
+        # RC-001: Return None instead of falling back to entities[0]
+        # Caller must handle None and ask user for clarification
+        return None
 
     @staticmethod
     def create_record(
@@ -64,7 +79,12 @@ class CRMSchemaTools:
         source: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Create a new record in the CRM dynamically without hardcoding entity or fields."""
+        """
+        Create a new record in the CRM dynamically without hardcoding entity or fields.
+        
+        RC-001 FIX: Now properly handles None returned by _resolve_entity instead of
+        silently creating in the wrong entity.
+        """
         repo = CRMRepository()
         crm = repo.get_crm(crm_id, owner_id)
         if not crm:
@@ -77,11 +97,26 @@ class CRMSchemaTools:
         config = crm.get("configuration", {})
         target_name = entity_name or entity_id or kwargs.get("entity")
         entity = CRMSchemaTools._resolve_entity(config, target_name)
+        
+        # RC-001: Explicitly check for None and return error with available entities
         if not entity:
+            entities = config.get("entities", [])
+            if not entities:
+                return {
+                    "success": False,
+                    "error_code": "INVALID_ENTITY",
+                    "error_message": f"No entities defined in this CRM",
+                }
+            
+            # Build list of available entities for error message
+            available = [f"{e.get('name')} ({e.get('label')})" for e in entities]
             return {
                 "success": False,
                 "error_code": "INVALID_ENTITY",
-                "error_message": f"Entity '{target_name}' not found",
+                "error_message": (
+                    f"Entity '{target_name}' not found. "
+                    f"Available entities: {', '.join(available)}"
+                ),
             }
 
         resolved_name = entity["name"]
@@ -133,7 +168,11 @@ class CRMSchemaTools:
         changes: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Update an existing record dynamically."""
+        """
+        Update an existing record dynamically.
+        
+        RC-001 FIX: Now properly handles None returned by _resolve_entity.
+        """
         repo = CRMRepository()
         crm = repo.get_crm(crm_id, owner_id)
         if not crm:
@@ -146,11 +185,24 @@ class CRMSchemaTools:
         config = crm.get("configuration", {})
         target_name = entity_name or entity_id or kwargs.get("entity")
         entity = CRMSchemaTools._resolve_entity(config, target_name)
+        
+        # RC-001: Explicitly check for None
         if not entity:
+            entities = config.get("entities", [])
+            if not entities:
+                return {
+                    "success": False,
+                    "error_code": "INVALID_ENTITY",
+                    "error_message": f"No entities defined in this CRM",
+                }
+            available = [f"{e.get('name')} ({e.get('label')})" for e in entities]
             return {
                 "success": False,
                 "error_code": "INVALID_ENTITY",
-                "error_message": f"Entity '{target_name}' not found",
+                "error_message": (
+                    f"Entity '{target_name}' not found. "
+                    f"Available entities: {', '.join(available)}"
+                ),
             }
 
         resolved_name = entity["name"]
@@ -226,7 +278,11 @@ class CRMSchemaTools:
         entity_id: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Soft delete a record dynamically."""
+        """
+        Soft delete a record dynamically.
+        
+        RC-001 FIX: Now properly handles None returned by _resolve_entity.
+        """
         repo = CRMRepository()
         crm = repo.get_crm(crm_id, owner_id)
         if not crm:
@@ -239,11 +295,24 @@ class CRMSchemaTools:
         config = crm.get("configuration", {})
         target_name = entity_name or entity_id or kwargs.get("entity")
         entity = CRMSchemaTools._resolve_entity(config, target_name)
+        
+        # RC-001: Explicitly check for None
         if not entity:
+            entities = config.get("entities", [])
+            if not entities:
+                return {
+                    "success": False,
+                    "error_code": "INVALID_ENTITY",
+                    "error_message": f"No entities defined in this CRM",
+                }
+            available = [f"{e.get('name')} ({e.get('label')})" for e in entities]
             return {
                 "success": False,
                 "error_code": "INVALID_ENTITY",
-                "error_message": f"Entity '{target_name}' not found",
+                "error_message": (
+                    f"Entity '{target_name}' not found. "
+                    f"Available entities: {', '.join(available)}"
+                ),
             }
 
         resolved_name = entity["name"]

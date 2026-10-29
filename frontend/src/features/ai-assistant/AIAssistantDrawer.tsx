@@ -41,36 +41,159 @@ function makeWelcome(crmName: string): Message {
 }
 
 /**
- * Parse TOOL_CALL: {...} JSON objects from LLM reply.
+ * Parse TOOL_CALL: {...} JSON objects from LLM reply using iterative JSON parsing.
+ * 
+ * RC-005/RC-008 FIX: Improved parser that handles deeply nested JSON structures
+ * instead of using limited regex. This ensures complex tool calls are parsed correctly
+ * even with multiple levels of nesting, arrays, and special characters.
+ * 
  * Returns list of {name, arguments} objects.
  */
 function parseToolCalls(text: string): ToolCall[] {
   const toolCalls: ToolCall[] = [];
   
-  // Match TOOL_CALL: {...} pattern (regex handles nested JSON up to ~2 levels)
-  const regex = /TOOL_CALL:\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})/g;
-  let match;
-  
-  while ((match = regex.exec(text)) !== null) {
-    try {
-      const call_json = match[1];
-      const call_obj = JSON.parse(call_json) as ToolCall;
-      if (call_obj.name && call_obj.arguments) {
-        toolCalls.push(call_obj);
-      }
-    } catch (e) {
-      console.warn('Failed to parse tool call:', match[1], e);
+  // Find all "TOOL_CALL:" markers in the text
+  let searchStart = 0;
+  while (true) {
+    const markerIndex = text.indexOf('TOOL_CALL:', searchStart);
+    if (markerIndex === -1) break;
+    
+    // Find the start of the JSON object (first '{' after the marker)
+    let jsonStart = markerIndex + 'TOOL_CALL:'.length;
+    while (jsonStart < text.length && /\s/.test(text[jsonStart])) {
+      jsonStart++; // Skip whitespace
     }
+    
+    if (jsonStart >= text.length || text[jsonStart] !== '{') {
+      searchStart = markerIndex + 1;
+      continue;
+    }
+    
+    // Try to parse JSON from this position
+    let braceCount = 0;
+    let jsonEnd = jsonStart;
+    let inString = false;
+    let escaped = false;
+    
+    for (let i = jsonStart; i < text.length; i++) {
+      const char = text[i];
+      
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+      
+      if (char === '"' && !escaped) {
+        inString = !inString;
+        continue;
+      }
+      
+      if (!inString) {
+        if (char === '{') braceCount++;
+        else if (char === '}') {
+          braceCount--;
+          if (braceCount === 0) {
+            jsonEnd = i + 1;
+            break;
+          }
+        }
+      }
+    }
+    
+    if (braceCount === 0 && jsonEnd > jsonStart) {
+      const jsonStr = text.substring(jsonStart, jsonEnd);
+      try {
+        const call_obj = JSON.parse(jsonStr) as ToolCall;
+        if (call_obj.name && call_obj.arguments) {
+          toolCalls.push(call_obj);
+        }
+      } catch (e) {
+        console.warn('Failed to parse tool call:', jsonStr, e);
+      }
+    }
+    
+    searchStart = jsonEnd || markerIndex + 1;
   }
   
   return toolCalls;
 }
 
 /**
- * Remove TOOL_CALL markers from text for display.
+ * Remove all TOOL_CALL markers from text for display.
+ * 
+ * RC-005/RC-008 FIX: Improved cleanup that removes markers even if parsing fails.
+ * Never displays raw TOOL_CALL markers to users.
  */
 function cleanToolCallMarkers(text: string): string {
-  return text.replace(/TOOL_CALL:\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g, '').trim();
+  let result = text;
+  let searchStart = 0;
+  
+  while (true) {
+    const markerIndex = result.indexOf('TOOL_CALL:', searchStart);
+    if (markerIndex === -1) break;
+    
+    // Find the start of the JSON object
+    let jsonStart = markerIndex + 'TOOL_CALL:'.length;
+    while (jsonStart < result.length && /\s/.test(result[jsonStart])) {
+      jsonStart++;
+    }
+    
+    if (jsonStart >= result.length || result[jsonStart] !== '{') {
+      searchStart = markerIndex + 1;
+      continue;
+    }
+    
+    // Find the end of the JSON object
+    let braceCount = 0;
+    let jsonEnd = jsonStart;
+    let inString = false;
+    let escaped = false;
+    
+    for (let i = jsonStart; i < result.length; i++) {
+      const char = result[i];
+      
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+      
+      if (char === '"' && !escaped) {
+        inString = !inString;
+        continue;
+      }
+      
+      if (!inString) {
+        if (char === '{') braceCount++;
+        else if (char === '}') {
+          braceCount--;
+          if (braceCount === 0) {
+            jsonEnd = i + 1;
+            break;
+          }
+        }
+      }
+    }
+    
+    // Remove the marker and JSON object
+    if (jsonEnd > jsonStart) {
+      result = result.substring(0, markerIndex) + result.substring(jsonEnd);
+      searchStart = markerIndex;
+    } else {
+      searchStart = markerIndex + 1;
+    }
+  }
+  
+  return result.trim();
 }
 
 export const AIAssistantDrawer: React.FC<AIAssistantDrawerProps> = ({ isOpen, onClose }) => {
