@@ -801,7 +801,7 @@ def test_create_proposal_passes_real_analytics_to_provider(mock_get_repo):
     repo = MagicMock()
     mock_get_repo.return_value = repo
 
-    # Use a CRM that has a status select field so won_leads can be computed
+    # Use a CRM that has a status select field
     crm_with_status = _mock_crm()
     crm_with_status["configuration"]["entities"][0]["fields"].append(
         {"name": "status", "label": "Status", "type": "select", "required": True,
@@ -809,12 +809,8 @@ def test_create_proposal_passes_real_analytics_to_provider(mock_get_repo):
     )
     repo.get_crm.return_value = crm_with_status
 
-    # Simulate 20 total leads, 4 won (conversion_rate = 0.20)
+    # Simulate 20 total records
     repo.count_records.return_value = 20
-    repo.count_records_by_field.return_value = [
-        {"value": "Won", "count": 4},
-        {"value": "New", "count": 16},
-    ]
 
     captured_analytics: dict = {}
 
@@ -844,9 +840,10 @@ def test_create_proposal_passes_real_analytics_to_provider(mock_get_repo):
         )
 
     assert response.status_code == 201
-    assert captured_analytics["total_leads"] == 20
-    assert captured_analytics["won_leads"] == 4
-    assert captured_analytics["conversion_rate"] == 0.2
+    # C5 Fix: Analytics now universal - uses total_records, not sales-specific fields
+    assert captured_analytics["total_records"] == 20
+    assert "conversion_rate" not in captured_analytics, "conversion_rate removed per C5"
+    assert "won_leads" not in captured_analytics, "won_leads removed per C5"
 
 
 @patch("app.routers.evolution._get_repo")
@@ -887,9 +884,9 @@ def test_create_proposal_succeeds_when_analytics_db_fails(mock_get_repo):
         )
 
     assert response.status_code == 201
-    # Graceful fallback: provider still gets called with zeros
-    assert captured_analytics["total_leads"] == 0
-    assert captured_analytics["conversion_rate"] == 0.0
+    # C5 Fix: Graceful fallback with universal analytics - zero total_records
+    assert captured_analytics["total_records"] == 0
+    assert "conversion_rate" not in captured_analytics, "conversion_rate removed per C5"
 
 
 def test_evolution_proposal_generate_clears_last_warnings():
