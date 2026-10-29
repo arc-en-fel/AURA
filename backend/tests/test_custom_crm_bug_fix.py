@@ -166,8 +166,8 @@ class TestCustomCRMBugFix:
         # Custom should have only user-requested fields
         assert "lead" in custom_fields
         
-        # General should have default fields
-        assert "full_name" in general_fields or "company" in general_fields
+        # General should have universal default fields (after Phase 1 universalization)
+        assert "name" in general_fields or "email" in general_fields
 
     def test_arrow_format_stages(self):
         """Pipeline stages with arrows should be parsed correctly."""
@@ -265,9 +265,9 @@ class TestCustomCRMRegressions:
         # Should be detected as real_estate
         assert config["industry"] == "real_estate"
         
-        # Should have real_estate entity
+        # Should have real_estate entity (now universal: "property" instead of "property_lead")
         entity_names = {e["name"] for e in config["entities"]}
-        assert "property_lead" in entity_names
+        assert "property" in entity_names
 
 
 if __name__ == "__main__":

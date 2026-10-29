@@ -633,6 +633,9 @@ async def copilot_chat(
     # Build context-aware system prompt
     system = _build_system_prompt(crm_context)
 
+    # Convert message objects to dicts for LLM
+    messages_dicts = [{"role": m.role, "content": m.content} for m in body.messages]
+
     # Try configured LLM provider
     raw_reply = None
     if settings.llm_provider == "groq" and settings.groq_api_key:
@@ -651,6 +654,7 @@ async def copilot_chat(
 
     # LLM unavailable or fallback — use universal action and intent resolver
     fallback = _universal_action_reply(latest, crm_context)
+    fallback["fallback"] = True
     return success_response(fallback)
 
 
