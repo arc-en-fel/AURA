@@ -11,6 +11,7 @@ in the prompt. It is NOT a real LLM and is clearly labeled as such.
 from __future__ import annotations
 
 import json
+import re
 from abc import ABC, abstractmethod
 from typing import Any
 

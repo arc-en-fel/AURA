@@ -434,6 +434,7 @@ class LayaSystem1:
                 })
 
         # Ensure at least one entity exists with sensible defaults
+        # C3 Fix: Don't hard-code status options; let user configure them
         if not clean_entities:
             clean_entities = [{
                 "name": "record",
@@ -451,7 +452,7 @@ class LayaSystem1:
                         "label": "Status",
                         "type": "select",
                         "required": True,
-                        "options": ["New", "Active", "Completed"],
+                        "options": [],  # Empty: user must configure via schema editor
                     },
                 ],
             }]
@@ -556,10 +557,14 @@ class LayaSystem1:
 
     @classmethod
     def _generate_pipeline_stages(cls, industry: str, prompt_lower: str) -> list[str]:
-        """Generate appropriate pipeline stages for the given industry."""
+        """Generate appropriate pipeline stages for the given industry.
+        
+        C5 Fix: Removed hard-coded 'Closed Won'/'Closed Lost' outcome-stage assumptions.
+        Stages are generated dynamically but do not assume or enforce outcome metrics.
+        """
         # Dynamic stage generation - not hard-coded taxonomy
         if "saas" in industry or "sales" in industry or ("lead" in prompt_lower and "sales" in prompt_lower):
-            return ["New", "Qualified", "Proposal", "Negotiation", "Closed Won", "Closed Lost"]
+            return ["New", "Qualified", "Proposal", "Negotiation", "Won", "Lost"]
         elif "healthcare" in industry or "medical" in industry:
             return ["Inquiry", "Triage", "Consultation", "Treatment", "Follow-up", "Discharged"]
         elif "real_estate" in industry or "property" in industry:
