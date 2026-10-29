@@ -40,6 +40,61 @@ def _create_test_crm_config(
     )
 
 
+def test_generate_scaffold_proposal_empty_entities_raises_error():
+    """C4: generate_scaffold_proposal should raise error for empty entities, not silent fallback."""
+    from app.services.laya_system1 import LayaSystem1
+    
+    crm_config_empty = {
+        "name": "Empty CRM",
+        "entities": [],  # Empty entities list
+        "pipeline_stages": ["New", "Active"],
+    }
+    
+    analytics = {"total_records": 0}
+    
+    # Should raise ValueError, not silently default to "lead"
+    with pytest.raises(ValueError, match="CRM configuration contains no entities"):
+        LayaSystem1.generate_scaffold_proposal("improve_follow_up", crm_config_empty, analytics)
+
+
+def test_generate_scaffold_proposal_entity_with_no_name_raises_error():
+    """C4: generate_scaffold_proposal should raise error if entity has no name."""
+    from app.services.laya_system1 import LayaSystem1
+    
+    crm_config_no_name = {
+        "name": "CRM with nameless entity",
+        "entities": [{"label": "Entity", "fields": []}],  # No 'name' key
+        "pipeline_stages": ["New", "Active"],
+    }
+    
+    analytics = {"total_records": 0}
+    
+    # Should raise ValueError
+    with pytest.raises(ValueError, match="has no name"):
+        LayaSystem1.generate_scaffold_proposal("improve_follow_up", crm_config_no_name, analytics)
+
+
+def test_generate_scaffold_proposal_uses_actual_entity_name():
+    """C4: generate_scaffold_proposal should use actual entity name from config."""
+    from app.services.laya_system1 import LayaSystem1
+    
+    crm_config = {
+        "name": "Healthcare CRM",
+        "entities": [{"name": "patient", "label": "Patient", "fields": []}],  # Actual entity name
+        "pipeline_stages": ["Intake", "Treatment", "Discharged"],
+    }
+    
+    analytics = {"total_records": 42}
+    
+    # Should succeed and use "patient" entity
+    result = LayaSystem1.generate_scaffold_proposal("improve_follow_up", crm_config, analytics)
+    
+    # Verify proposal uses 'patient' entity in trigger
+    assert result["proposed_change"]["trigger"]["entity"] == "patient"
+    # Verify proposal name includes entity name
+    assert "patient" in result["proposed_change"]["name"].lower() or result["proposed_change"]["name"].startswith("Quick response follow-up for patient")
+
+
 @pytest.mark.asyncio
 async def test_entity_resolution_uses_first_entity_not_fallback():
     """C4: Should use first entity from config, not fall back to hard-coded 'lead'."""

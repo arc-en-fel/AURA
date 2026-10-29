@@ -775,10 +775,25 @@ class LayaSystem1:
     ) -> dict[str, Any]:
         """Generate and rank allowlisted evolution proposals with verifiable evidence."""
         obj = objective.lower()
-        primary_entity = "lead"
         entities = crm_config.get("entities", [])
-        if entities and isinstance(entities[0], dict):
-            primary_entity = entities[0].get("name", "lead")
+        
+        # Validate entities exist; don't silently default to "lead" (C4 fix)
+        if not entities:
+            raise ValueError(
+                "Cannot generate evolution proposal: CRM configuration contains no entities. "
+                "Ensure CRM configuration is valid and has at least one entity defined."
+            )
+        
+        # Extract primary entity name; validate it exists
+        if isinstance(entities[0], dict):
+            primary_entity = entities[0].get("name")
+            if not primary_entity:
+                raise ValueError("First entity in CRM configuration has no name.")
+        else:
+            # Handle Pydantic model
+            primary_entity = getattr(entities[0], "name", None)
+            if not primary_entity:
+                raise ValueError("Could not resolve entity name from configuration.")
 
         # Candidate pool
         candidates = [
