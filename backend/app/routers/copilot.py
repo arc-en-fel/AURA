@@ -152,104 +152,378 @@ def _build_system_prompt(crm_context: dict[str, Any] | None) -> str:
     return base
 
 
-# ── Deterministic navigation fallback ─────────────────────────────
+# ── Universal Intent Resolver & Fallback ──────────────────────────
 
-def _deterministic_reply(question: str, crm_context: dict[str, Any] | None) -> dict[str, Any]:
+def _universal_action_reply(question: str, crm_context: dict[str, Any] | None) -> dict[str, Any]:
     """
-    Returns a helpful reply and optional navigation action without calling Ollama.
-    Used when Ollama is unavailable.
+    Intelligently analyzes user input and either generates an executable TOOL_CALL
+    or returns schema-grounded information. Works for ANY CRM without hardcoding.
     """
-    q = question.lower()
-    crm_name = crm_context.get("configuration", {}).get("name", "your CRM") if crm_context else "your CRM"
+    import json
+    q = question.strip()
+    q_lower = q.lower()
+    
+    config = crm_context.get("configuration", {}) if crm_context else {}
+    crm_name = config.get("name", "your CRM")
+    entities = config.get("entities", [])
+    primary_entity = entities[0] if entities else None
+    primary_entity_name = primary_entity["name"] if primary_entity else "record"
+    primary_entity_label = primary_entity["label"] if primary_entity else "Record"
+    pipeline_stages = config.get("pipeline_stages", [])
 
-    if any(w in q for w in ["evolution", "proposal", "improve", "change crm", "update crm"]):
+    # Find which entity the user might be referring to
+    target_entity = primary_entity
+    for ent in entities:
+        if ent["name"].lower() in q_lower or ent["label"].lower() in q_lower:
+            target_entity = ent
+            break
+
+    target_entity_name = target_entity["name"] if target_entity else primary_entity_name
+    target_entity_label = target_entity["label"] if target_entity else primary_entity_label
+    entity_fields = target_entity.get("fields", []) if target_entity else []
+
+    # 1. ACTION: Delete Record
+    # E.g. "Delete John's record", "Remove this ticket", "Delete customer Alice"
+    if any(q_lower.startswith(w) or f" {w} " in f" {q_lower} " for w in ["delete", "remove", "drop"]) and any(
+        w in q_lower for w in ["record", "ticket", "customer", "lead", "candidate", "shipment", "item", "'s record", "this"]
+    ) and not any(w in q_lower for w in ["field", "column", "stage", "status"]):
+        # Extract target identifier
+        clean_target = re.sub(r"^(please\s+)?(delete|remove|drop)\s+(the\s+|this\s+)?", "", q, flags=re.IGNORECASE)
+        clean_target = re.sub(r"('s\s+record|\s+record|\s+ticket|\s+entry).*$", "", clean_target, flags=re.IGNORECASE).strip()
+        record_id = clean_target if clean_target else "target_record"
+        
+        tool_call = {
+            "name": "delete_record",
+            "arguments": {
+                "entity_name": target_entity_name,
+                "record_id": record_id,
+            }
+        }
         return {
-            "reply": (
-                f"To suggest improvements to {crm_name}, go to the Evolution Center. "
-                "AURA will generate an AI-powered proposal that you can review and approve "
-                "before any change is applied."
-            ),
-            "nav_route": AURA_ROUTES["evolution"],
-            "nav_label": "Go to Evolution Center",
-            "fallback": True,
+            "reply": f"I have prepared the deletion action for {target_entity_label} record '{record_id}'. Please confirm in the dialog to proceed.\n\nTOOL_CALL: {json.dumps(tool_call)}",
+            "nav_route": None,
+            "nav_label": None,
+            "fallback": False,
         }
 
-    if any(w in q for w in ["workflow", "automation", "trigger", "follow-up", "follow up"]):
+    # 2. ACTION: Update Record
+    # E.g. "Change John's status to Won", "Update ticket priority to High", "Change shipment destination to Chicago"
+    if any(q_lower.startswith(w) or f" {w} " in f" {q_lower} " for w in ["update", "change", "set", "modify"]):
+        # Look for field being changed
+        matched_field = None
+        new_val = None
+        for f in entity_fields:
+            f_norm = f["name"].replace("_", " ")
+            if f["name"].lower() in q_lower or f["label"].lower() in q_lower or f_norm in q_lower:
+                matched_field = f
+                break
+
+        # Check if updating a pipeline stage / status
+        if not matched_field:
+            for stage in pipeline_stages:
+                if stage.lower() in q_lower:
+                    new_val = stage
+                    # Find status field
+                    for f in entity_fields:
+                        if f["type"] in ("select", "status") or "status" in f["name"] or "stage" in f["name"]:
+                            matched_field = f
+                            break
+                    break
+
+        # Extract record identifier
+        rec_match = re.search(r"(?:update|change|set)\s+([A-Za-z0-9_\-\s]+?)(?:'s|\s+status|\s+field|\s+to|\s+priority)", q, re.IGNORECASE)
+        record_id = rec_match.group(1).strip() if rec_match else "recent"
+
+        # Extract new value if after 'to' or '='
+        if not new_val:
+            val_match = re.search(r"(?:to|=|is)\s+['\"]?([A-Za-z0-9_\-\s]+)['\"]?$", q, re.IGNORECASE)
+            new_val = val_match.group(1).strip() if val_match else "Updated Value"
+
+        field_key = matched_field["name"] if matched_field else "status"
+        tool_call = {
+            "name": "update_record",
+            "arguments": {
+                "entity_name": target_entity_name,
+                "record_id": record_id,
+                "data": {field_key: new_val},
+            }
+        }
         return {
-            "reply": (
-                "Workflows in AURA fire automatically when a record event occurs "
-                "(created, updated, or stage changed). Each workflow has one trigger "
-                "and one or more allowlisted actions like creating a follow-up task or notifying the owner. "
-                "You can view and manage workflows on the Workflows page."
-            ),
-            "nav_route": AURA_ROUTES["workflows"],
-            "nav_label": "View Workflows",
-            "fallback": True,
+            "reply": f"I've prepared the update for {target_entity_label} record '{record_id}' ({field_key} → {new_val}).\n\nTOOL_CALL: {json.dumps(tool_call)}",
+            "nav_route": None,
+            "nav_label": None,
+            "fallback": False,
         }
 
-    if any(w in q for w in ["record", "lead", "contact", "deal", "patient", "customer", "import"]):
+    # 3. ACTION: Create Record
+    # E.g. "Add a record", "Add John", "Create a new customer", "Add a new ticket", "Create a shipment", "Add customer Alice with email alice@corp.com"
+    if any(q_lower.startswith(w) or f" {w} " in f" {q_lower} " for w in ["add", "create", "new", "insert", "make"]) and (
+        any(w in q_lower for w in ["record", "customer", "lead", "ticket", "candidate", "shipment", "item", "order", "entry", "user"])
+        or (len(q.split()) <= 4 and any(q_lower.startswith(w) for w in ["add ", "create ", "new "]))
+    ) and not any(w in q_lower for w in ["field", "column", "stage", "status"]):
+        record_data: dict[str, Any] = {}
+
+        # Look for explicit key-value pairs (e.g. name: John, email: test@test.com)
+        for f in entity_fields:
+            fname = f["name"]
+            flabel = f["label"]
+            match = re.search(rf"(?:{fname}|{flabel})\s*[:=]\s*['\"]?([^,;\n]+)['\"]?", q, re.IGNORECASE)
+            if match:
+                val = match.group(1).strip()
+                record_data[fname] = Number(val) if f["type"] in ("number", "currency") and val.replace(".", "").isdigit() else val
+
+        # Extract email if present
+        email_match = re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", q)
+        if email_match:
+            for f in entity_fields:
+                if f["type"] == "email" or "email" in f["name"]:
+                    record_data[f["name"]] = email_match.group(0)
+                    break
+
+        # Extract name if simple command like "Add John" or "Create customer Sarah Smith"
+        name_match = re.search(r"(?:add|create)\s+(?:a\s+|new\s+)?(?:record\s+|customer\s+|lead\s+|ticket\s+|candidate\s+|shipment\s+)?([A-Za-z]+(?:\s+[A-Za-z]+)?)(?:\s+with|\s+and|\s*$)", q, re.IGNORECASE)
+        if name_match:
+            cand_name = name_match.group(1).strip()
+            if cand_name.lower() not in ["a", "new", "record", "ticket", "customer", "lead", "candidate", "shipment"]:
+                # Map to primary name/title/text field
+                for f in entity_fields:
+                    if f["type"] in ("text", "textarea") and any(k in f["name"].lower() for k in ["name", "title", "customer", "lead", "candidate", "specimen", "client"]):
+                        record_data[f["name"]] = cand_name
+                        break
+                if not any(k in record_data for k in ["name", "full_name"]):
+                    first_text = next((f["name"] for f in entity_fields if f["type"] == "text"), None)
+                    if first_text and first_text not in record_data:
+                        record_data[first_text] = cand_name
+
+        # Set default status / stage if entity has a status field and none provided
+        for f in entity_fields:
+            if (f["type"] in ("select", "status") or "status" in f["name"]) and f["name"] not in record_data:
+                if f.get("options") and len(f["options"]) > 0:
+                    record_data[f["name"]] = f["options"][0]
+                elif pipeline_stages:
+                    record_data[f["name"]] = pipeline_stages[0]
+
+        # If still completely empty, populate primary field with sample placeholder
+        if not record_data and entity_fields:
+            first_f = entity_fields[0]
+            record_data[first_f["name"]] = f"New {target_entity_label}"
+
+        tool_call = {
+            "name": "create_record",
+            "arguments": {
+                "entity_name": target_entity_name,
+                "data": record_data,
+            }
+        }
         return {
-            "reply": (
-                f"Records in {crm_name} are stored dynamically — each record belongs to an entity "
-                "you defined (like 'lead' or 'patient') and contains only the fields in your CRM schema. "
-                "You can create, edit, filter, and import records via CSV on the Records page."
-            ),
-            "nav_route": AURA_ROUTES["records"],
-            "nav_label": "Open Records",
-            "fallback": True,
+            "reply": f"I've prepared a new {target_entity_label} record for creation.\n\nTOOL_CALL: {json.dumps(tool_call)}",
+            "nav_route": None,
+            "nav_label": None,
+            "fallback": False,
         }
 
-    if any(w in q for w in ["analytics", "conversion", "metric", "pipeline", "funnel", "stat"]):
+    # 4. ACTION: Add Column / Field
+    # E.g. "Add a new column Priority", "Add field Country as text"
+    if any(q_lower.startswith(w) or f" {w} " in f" {q_lower} " for w in ["add", "create", "new"]) and any(
+        w in q_lower for w in ["column", "field"]
+    ):
+        field_match = re.search(r"(?:add|create|new)\s+(?:a\s+|new\s+)?(?:column|field)\s+([A-Za-z0-9_\-\s]+)", q, re.IGNORECASE)
+        raw_name = field_match.group(1).strip() if field_match else "new_field"
+        clean_name = re.sub(r"\s+(as|type|with).*$", "", raw_name, flags=re.IGNORECASE).strip()
+        machine_name = clean_name.lower().replace(" ", "_")
+        label = clean_name.title()
+        
+        # Infer type
+        field_type = "text"
+        if any(w in q_lower for w in ["number", "count", "amount", "price", "score"]):
+            field_type = "number"
+        elif any(w in q_lower for w in ["currency", "revenue", "dollar", "cost"]):
+            field_type = "currency"
+        elif any(w in q_lower for w in ["date", "deadline", "time"]):
+            field_type = "date"
+        elif any(w in q_lower for w in ["select", "dropdown", "option"]):
+            field_type = "select"
+        elif any(w in q_lower for w in ["email"]):
+            field_type = "email"
+        elif any(w in q_lower for w in ["boolean", "toggle", "checkbox"]):
+            field_type = "boolean"
+
+        tool_call = {
+            "name": "add_crm_field",
+            "arguments": {
+                "entity_name": target_entity_name,
+                "field_name": machine_name,
+                "label": label,
+                "field_type": field_type,
+            }
+        }
+        return {
+            "reply": f"I've prepared the schema modification to add field '{label}' ({field_type}) to {target_entity_label}.\n\nTOOL_CALL: {json.dumps(tool_call)}",
+            "nav_route": None,
+            "nav_label": None,
+            "fallback": False,
+        }
+
+    # 5. ACTION: Delete Column / Field
+    if any(q_lower.startswith(w) or f" {w} " in f" {q_lower} " for w in ["delete", "remove", "drop"]) and any(
+        w in q_lower for w in ["column", "field"]
+    ):
+        field_match = re.search(r"(?:delete|remove|drop)\s+(?:the\s+)?(?:column|field)\s+([A-Za-z0-9_\-\s]+)", q, re.IGNORECASE)
+        raw_name = field_match.group(1).strip() if field_match else ""
+        machine_name = raw_name.lower().replace(" ", "_")
+        
+        tool_call = {
+            "name": "delete_crm_field",
+            "arguments": {
+                "entity_name": target_entity_name,
+                "field_name": machine_name,
+            }
+        }
+        return {
+            "reply": f"I've prepared the deletion of field '{machine_name}' from {target_entity_label}. Please confirm in the dialog.\n\nTOOL_CALL: {json.dumps(tool_call)}",
+            "nav_route": None,
+            "nav_label": None,
+            "fallback": False,
+        }
+
+    # 6. ACTION: Add Stage / Status
+    # E.g. "Add Negotiation as a status", "Add In Review stage"
+    if any(q_lower.startswith(w) or f" {w} " in f" {q_lower} " for w in ["add", "create", "new"]) and any(
+        w in q_lower for w in ["stage", "status", "pipeline stage"]
+    ):
+        stage_match = re.search(r"(?:add|create|new)\s+['\"]?([A-Za-z0-9_\-\s]+?)['\"]?\s+(?:as\s+a\s+|as\s+)?(?:stage|status)", q, re.IGNORECASE)
+        if not stage_match:
+            stage_match = re.search(r"(?:stage|status)\s+['\"]?([A-Za-z0-9_\-\s]+)['\"]?", q, re.IGNORECASE)
+        stage_name = stage_match.group(1).strip() if stage_match else "New Stage"
+        
+        tool_call = {
+            "name": "add_crm_stage",
+            "arguments": {
+                "stage_name": stage_name,
+            }
+        }
+        return {
+            "reply": f"I've prepared the action to add '{stage_name}' to the pipeline stages.\n\nTOOL_CALL: {json.dumps(tool_call)}",
+            "nav_route": None,
+            "nav_label": None,
+            "fallback": False,
+        }
+
+    # 7. ACTION: Delete Stage / Status
+    # E.g. "Remove Waiting status", "Delete Closed stage"
+    if any(q_lower.startswith(w) or f" {w} " in f" {q_lower} " for w in ["delete", "remove", "drop"]) and any(
+        w in q_lower for w in ["stage", "status"]
+    ):
+        stage_match = re.search(r"(?:delete|remove|drop)\s+['\"]?([A-Za-z0-9_\-\s]+?)['\"]?\s+(?:stage|status)", q, re.IGNORECASE)
+        if not stage_match:
+            stage_match = re.search(r"(?:stage|status)\s+['\"]?([A-Za-z0-9_\-\s]+)['\"]?", q, re.IGNORECASE)
+        stage_name = stage_match.group(1).strip() if stage_match else ""
+        
+        tool_call = {
+            "name": "delete_crm_stage",
+            "arguments": {
+                "stage_name": stage_name,
+            }
+        }
+        return {
+            "reply": f"I've prepared the deletion of stage '{stage_name}'. Please confirm in the dialog to proceed.\n\nTOOL_CALL: {json.dumps(tool_call)}",
+            "nav_route": None,
+            "nav_label": None,
+            "fallback": False,
+        }
+
+    # 8. INFORMATIONAL: Schema / Fields Question
+    # E.g. "What fields does my CRM have?", "What entities exist?"
+    if any(w in q_lower for w in ["what field", "which field", "list field", "fields does", "entities", "schema", "structure"]):
+        if entities:
+            summary_parts = []
+            for ent in entities:
+                f_list = ", ".join(f"{f['label']} ({f['type']})" for f in ent.get("fields", []))
+                summary_parts.append(f"**{ent['label']}** ({ent['name']}): {f_list}")
+            
+            stages_text = " → ".join(pipeline_stages) if pipeline_stages else "None configured"
+            reply_text = (
+                f"**{crm_name}** configuration:\n\n"
+                + "\n".join(summary_parts)
+                + f"\n\n**Pipeline Stages:** {stages_text}"
+            )
+            return {
+                "reply": reply_text,
+                "nav_route": None,
+                "nav_label": None,
+                "fallback": False,
+            }
+
+    # 9. INFORMATIONAL: Stages / Status Flow Question
+    if any(w in q_lower for w in ["what stage", "which stage", "status flow", "pipeline stages", "statuses"]):
+        stages_text = " → ".join(pipeline_stages) if pipeline_stages else "No stages configured"
+        return {
+            "reply": f"The pipeline stages for **{crm_name}** are:\n\n{stages_text}",
+            "nav_route": None,
+            "nav_label": None,
+            "fallback": False,
+        }
+
+    # 10. INFORMATIONAL: Analytics & Metrics
+    if any(w in q_lower for w in ["analytics", "conversion", "metric", "pipeline", "funnel", "stat", "chart", "kpi"]):
         return {
             "reply": (
-                f"AURA tracks total leads, qualified leads, won leads, and conversion rate for {crm_name}. "
-                "The Analytics page shows a pipeline stage breakdown and source distribution chart."
+                f"You can view dynamic real-time analytics, status distributions, and categorical breakdowns for {crm_name} on the Analytics page."
             ),
             "nav_route": AURA_ROUTES["analytics"],
             "nav_label": "View Analytics",
-            "fallback": True,
+            "fallback": False,
         }
 
-    if any(w in q for w in ["build", "create crm", "new crm", "generate crm"]):
+    # 11. INFORMATIONAL: Records Navigation
+    if any(w in q_lower for w in ["records", "view record", "open record", "table", "csv"]):
         return {
             "reply": (
-                "To build a new CRM, go to the Build a CRM page. "
-                "AURA will guide you through a short questionnaire and then generate a custom CRM schema "
-                "tailored to your business."
+                f"Records in {crm_name} are organized by entity with dynamic columns generated from your schema. You can add, edit, search, and import records on the Records page."
             ),
-            "nav_route": AURA_ROUTES["build_crm"],
-            "nav_label": "Build a CRM",
-            "fallback": True,
+            "nav_route": AURA_ROUTES["records"],
+            "nav_label": "Open Records",
+            "fallback": False,
         }
 
-    if any(w in q for w in ["field", "entity", "schema", "structure", "config"]):
-        if crm_context:
-            entities = crm_context.get("configuration", {}).get("entities", [])
-            entity_lines = [
-                f"{e['label']}: {', '.join(f['name'] for f in e.get('fields', [])[:5])}"
-                for e in entities[:3]
-            ]
-            return {
-                "reply": (
-                    f"{crm_name} has {len(entities)} entity type(s): "
-                    + "; ".join(entity_lines) + ". "
-                    "To change the schema, use the Evolution Center."
-                ),
-                "nav_route": None,
-                "nav_label": None,
-                "fallback": True,
-            }
-
+    # Default friendly assistant reply
     return {
         "reply": (
-            "I can help with questions about your CRM configuration, records, workflows, analytics, "
-            "and evolution proposals. Try asking something like 'What fields does my lead entity have?' "
-            "or 'How do I improve my conversion rate?'."
+            f"I'm AURA Copilot for **{crm_name}**. I can create records, update values, delete records, "
+            f"add new fields/stages, or answer questions about your CRM. What would you like to do?"
         ),
         "nav_route": None,
         "nav_label": None,
-        "fallback": True,
+        "fallback": False,
     }
+
+
+def _call_groq_copilot(messages: list[dict], system: str, settings: Settings) -> str | None:
+    """Call Groq provider for copilot chat if configured."""
+    if not settings.groq_api_key:
+        return None
+    try:
+        from app.services.groq_provider import GroqProvider
+        provider = GroqProvider(settings)
+        formatted_messages = [{"role": "system", "content": system}] + messages
+        result = provider.chat(formatted_messages)
+        content = result.get("content", "")
+        tool_calls = result.get("tool_calls", [])
+        if tool_calls:
+            for tc in tool_calls:
+                fn = tc.get("function", {})
+                name = fn.get("name")
+                args = fn.get("arguments")
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except Exception:
+                        pass
+                content += f"\nTOOL_CALL: {json.dumps({'name': name, 'arguments': args})}"
+        return content.strip() if content.strip() else None
+    except Exception as exc:
+        logger.info("Groq copilot call failed: %s", exc)
+        return None
 
 
 # ── Ollama call ────────────────────────────────────────────────────
@@ -359,9 +633,12 @@ async def copilot_chat(
     # Build context-aware system prompt
     system = _build_system_prompt(crm_context)
 
-    # Call Ollama
-    messages_dicts = [{"role": m.role, "content": m.content} for m in body.messages]
-    raw_reply = _call_ollama_copilot(messages_dicts, system)
+    # Try configured LLM provider
+    raw_reply = None
+    if settings.llm_provider == "groq" and settings.groq_api_key:
+        raw_reply = _call_groq_copilot(messages_dicts, system, settings)
+    elif settings.llm_provider == "local":
+        raw_reply = _call_ollama_copilot(messages_dicts, system)
 
     if raw_reply:
         clean_reply, nav_route, nav_label = _parse_nav(raw_reply)
@@ -372,8 +649,8 @@ async def copilot_chat(
             "fallback": False,
         })
 
-    # Ollama unavailable — use deterministic fallback
-    fallback = _deterministic_reply(latest, crm_context)
+    # LLM unavailable or fallback — use universal action and intent resolver
+    fallback = _universal_action_reply(latest, crm_context)
     return success_response(fallback)
 
 

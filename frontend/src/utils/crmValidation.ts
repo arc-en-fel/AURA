@@ -169,6 +169,8 @@ export function getFieldTypeLabel(type: FieldType): string {
     multi_select: 'Multi-Select',
     phone: 'Phone',
     url: 'URL',
+    currency: 'Currency ($)',
+    status: 'Status / Stage',
   };
   return labels[type] || type;
 }

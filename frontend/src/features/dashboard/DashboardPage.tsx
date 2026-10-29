@@ -100,7 +100,7 @@ export const DashboardPage: React.FC = () => {
             </div>
           </div>
           <p className="text-2xl font-bold text-aura-navy mt-3">
-            {analytics?.total_leads ?? 0}
+            {(analytics as any)?.total_records ?? analytics?.total_leads ?? 0}
           </p>
           <p className="text-[11px] text-slate-400 mt-1">In active CRM entities</p>
         </Card>
@@ -108,17 +108,17 @@ export const DashboardPage: React.FC = () => {
         <Card className="p-4 sm:p-5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Conversion Rate
+              Pipeline Stages
             </span>
             <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
               <TrendingUp className="w-4 h-4" />
             </div>
           </div>
           <p className="text-2xl font-bold text-aura-navy mt-3">
-            {analytics && (analytics.conversion_rate !== undefined) ? `${((analytics.conversion_rate ?? 0) * 100).toFixed(1)}%` : '0%'}
+            {activeCRM?.configuration?.pipeline_stages?.length || 0}
           </p>
           <p className="text-[11px] text-slate-400 mt-1">
-            {(analytics && 'won_leads' in analytics ? (analytics as any).won_leads : 0) ?? 0} won deals
+            Configured workflow stages
           </p>
         </Card>
 

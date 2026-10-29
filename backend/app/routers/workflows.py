@@ -147,65 +147,192 @@ async def get_analytics(crm_id: UUID, user_id: CurrentUser):
 
     primary_entity = config.entities[0]
     entity_name = primary_entity.name
+    entity_label = primary_entity.label or entity_name.replace("_", " ").title()
 
     # Get pipeline stages from configuration (user-defined)
     pipeline_stages = config.pipeline_stages if config.pipeline_stages else []
 
-    # Find stage field (typically "status" or "stage" with type "select")
-    stage_field_name = None
+    # Find stage/status field
+    stage_field = None
     for field in primary_entity.fields:
-        if field.type == "select" and field.name in ("status", "stage"):
-            stage_field_name = field.name
+        if field.type in ("status", "select") and any(k in field.name.lower() for k in ("status", "stage")):
+            stage_field = field
             break
+    if not stage_field and pipeline_stages:
+        for field in primary_entity.fields:
+            if field.type in ("status", "select"):
+                stage_field = field
+                break
 
-    # Find source field (typically "source" with type "select")
-    source_field_name = None
-    for field in primary_entity.fields:
-        if field.name == "source":
-            source_field_name = field.name
-            break
+    stage_field_name = stage_field.name if stage_field else None
+
+    # Categorical and numeric fields identification
+    select_fields = [f for f in primary_entity.fields if f.type in ("select", "status") and f.name != stage_field_name]
+    numeric_fields = [f for f in primary_entity.fields if f.type in ("number", "currency")]
 
     try:
-        # Query: Total records
-        total_records = repo.count_records(str(crm_id), entity_name)
+        # Fetch all records for this entity
+        all_records = repo.get_all_records(str(crm_id), entity_name)
+        total_records = len(all_records)
 
-        # Query: Records by stage
-        by_stage: list[dict[str, Any]] = []
+        # 1. Pipeline Stage Analytics: ALL stages in schema appear
+        stage_counts_map: dict[str, int] = {s: 0 for s in pipeline_stages}
         if stage_field_name:
-            stage_counts = repo.count_records_by_field(str(crm_id), entity_name, stage_field_name)
-            # Add percentage for each stage
-            for entry in stage_counts:
-                count = entry.get("count", 0)
-                percentage = (count / total_records * 100) if total_records > 0 else 0.0
-                by_stage.append({
-                    "value": entry.get("value", "Unassigned"),
-                    "count": count,
-                    "percentage": round(percentage, 1),
-                })
+            for r in all_records:
+                st = str(r.get("data", {}).get(stage_field_name, "")).strip()
+                if st:
+                    stage_counts_map[st] = stage_counts_map.get(st, 0) + 1
 
-        # Query: Records by source
-        by_source: list[dict[str, Any]] = []
+        by_stage: list[dict[str, Any]] = []
+        for stage_val, count in stage_counts_map.items():
+            pct = round((count / total_records * 100), 1) if total_records > 0 else 0.0
+            by_stage.append({
+                "value": stage_val,
+                "name": stage_val,
+                "count": count,
+                "percentage": pct,
+            })
+
+        # 2. Categorical Metrics
+        categorical_metrics: list[dict[str, Any]] = []
+        for sf in select_fields:
+            counts: dict[str, int] = {}
+            for r in all_records:
+                v = str(r.get("data", {}).get(sf.name, "")).strip()
+                if v:
+                    counts[v] = counts.get(v, 0) + 1
+            dist: list[dict[str, Any]] = []
+            for val, cnt in counts.items():
+                p = round((cnt / total_records * 100), 1) if total_records > 0 else 0.0
+                dist.append({"value": val, "name": val, "count": cnt, "percentage": p})
+            dist.sort(key=lambda x: x["count"], reverse=True)
+            categorical_metrics.append({
+                "field_name": sf.name,
+                "field_label": sf.label,
+                "distribution": dist,
+            })
+
+        # By source backward compatibility
+        by_source = []
+        source_field_name = None
+        for sf in primary_entity.fields:
+            if "source" in sf.name.lower():
+                source_field_name = sf.name
+                break
         if source_field_name:
-            source_counts = repo.count_records_by_field(str(crm_id), entity_name, source_field_name)
-            for entry in source_counts:
-                count = entry.get("count", 0)
-                percentage = (count / total_records * 100) if total_records > 0 else 0.0
-                by_source.append({
-                    "value": entry.get("value", "Direct"),
-                    "count": count,
-                    "percentage": round(percentage, 1),
-                })
+            counts = {}
+            for r in all_records:
+                src = str(r.get("data", {}).get(source_field_name, "")).strip()
+                if src:
+                    counts[src] = counts.get(src, 0) + 1
+            for k, v in counts.items():
+                p = round((v / total_records * 100), 1) if total_records > 0 else 0.0
+                by_source.append({"value": k, "name": k, "count": v, "percentage": p})
+
+        # 3. Numeric Aggregations (Total, Average, Min, Max)
+        numeric_metrics: list[dict[str, Any]] = []
+        for nf in numeric_fields:
+            vals: list[float] = []
+            for r in all_records:
+                raw_v = r.get("data", {}).get(nf.name)
+                if raw_v is not None and raw_v != "":
+                    try:
+                        vals.append(float(raw_v))
+                    except (ValueError, TypeError):
+                        pass
+            if vals:
+                total_val = round(sum(vals), 2)
+                avg_val = round(total_val / len(vals), 2)
+                min_val = round(min(vals), 2)
+                max_val = round(max(vals), 2)
+            else:
+                total_val = 0.0
+                avg_val = 0.0
+                min_val = 0.0
+                max_val = 0.0
+
+            numeric_metrics.append({
+                "field_name": nf.name,
+                "field_label": nf.label,
+                "type": nf.type,
+                "total": total_val,
+                "average": avg_val,
+                "min": min_val,
+                "max": max_val,
+            })
+
+        # 4. Dynamic KPI Cards
+        kpi_cards: list[dict[str, Any]] = [
+            {
+                "id": "total_volume",
+                "title": f"Total {entity_label}s",
+                "value": total_records,
+                "subtitle": "Total volume in CRM",
+                "format": "number",
+            }
+        ]
+        for nm in numeric_metrics[:3]:
+            fmt = "currency" if nm["type"] == "currency" or "revenue" in nm["field_name"] or "value" in nm["field_name"] or "price" in nm["field_name"] else "number"
+            kpi_cards.append({
+                "id": f"total_{nm['field_name']}",
+                "title": f"Total {nm['field_label']}",
+                "value": nm["total"],
+                "subtitle": f"Aggregated {nm['field_label']}",
+                "format": fmt,
+            })
+            kpi_cards.append({
+                "id": f"avg_{nm['field_name']}",
+                "title": f"Average {nm['field_label']}",
+                "value": nm["average"],
+                "subtitle": f"Per {entity_label}",
+                "format": fmt,
+            })
+
+        # If we have pipeline stages, add stage completion KPI
+        if pipeline_stages and by_stage:
+            last_stage = pipeline_stages[-1]
+            last_stage_count = stage_counts_map.get(last_stage, 0)
+            kpi_cards.append({
+                "id": "stage_completed",
+                "title": f"{last_stage} {entity_label}s",
+                "value": last_stage_count,
+                "subtitle": f"Reached final stage",
+                "format": "number",
+            })
+
+        # Backward compatibility for legacy tests
+        won_count = 0
+        qualified_count = 0
+        for s in by_stage:
+            val_lower = str(s.get("value", "")).lower()
+            if "won" in val_lower or "closed" in val_lower or "hired" in val_lower or "completed" in val_lower:
+                won_count += s.get("count", 0)
+            if "qualif" in val_lower or "interview" in val_lower or "screening" in val_lower:
+                qualified_count += s.get("count", 0)
+        conversion_rate = round(won_count / total_records, 4) if total_records > 0 else 0.0
 
         return success_response({
             "total_records": total_records,
+            "entity_name": entity_name,
+            "entity_label": entity_label,
             "by_stage": by_stage,
             "by_source": by_source,
+            "numeric_metrics": numeric_metrics,
+            "categorical_metrics": categorical_metrics,
+            "kpi_cards": kpi_cards,
             "schema_info": {
                 "primary_entity_name": entity_name,
                 "pipeline_stages": pipeline_stages,
                 "stage_field_name": stage_field_name,
                 "source_field_name": source_field_name,
-            }
+                "categorical_fields": [{"name": f.name, "label": f.label} for f in select_fields],
+                "numeric_fields": [{"name": f.name, "label": f.label, "type": f.type} for f in numeric_fields],
+            },
+            # Backward compatibility fields
+            "total_leads": total_records,
+            "qualified_leads": qualified_count,
+            "won_leads": won_count,
+            "conversion_rate": conversion_rate,
         })
     except Exception as exc:
         logger.exception("Error computing analytics")

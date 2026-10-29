@@ -70,70 +70,9 @@ class NormalizedSchema:
 
 
 # ────────────────────────────────────────────────────────────────
-
-
-INDUSTRY_TAXONOMIES: dict[str, dict[str, Any]] = {
-    "saas": {
-        "label": "B2B SaaS Sales CRM",
-        "default_entity": "lead",
-        "pipeline": ["New", "Discovery", "Demo Scheduled", "Proposal", "Negotiation", "Closed Won", "Closed Lost"],
-        "fields": [
-            {"name": "full_name", "label": "Full Name", "type": "text", "required": True},
-            {"name": "email", "label": "Work Email", "type": "email", "required": True},
-            {"name": "company", "label": "Company", "type": "text", "required": False},
-            {"name": "lead_source", "label": "Lead Source", "type": "select", "required": True,
-             "options": ["Website", "Product Trial", "Inbound", "Referral", "Outbound"]},
-            {"name": "deal_size", "label": "ARR Estimate ($)", "type": "number", "required": False},
-            {"name": "status", "label": "Lead Status", "type": "select", "required": True,
-             "options": ["New", "Discovery", "Demo Scheduled", "Proposal", "Negotiation", "Closed Won", "Closed Lost"]},
-        ],
-    },
-    "healthcare": {
-        "label": "Healthcare Clinic CRM",
-        "default_entity": "patient",
-        "pipeline": ["Inquiry", "Triage", "Consultation Booked", "Treatment", "Follow-up Completed"],
-        "fields": [
-            {"name": "full_name", "label": "Patient Full Name", "type": "text", "required": True},
-            {"name": "phone", "label": "Primary Contact Phone", "type": "phone", "required": True},
-            {"name": "email", "label": "Email Address", "type": "email", "required": False},
-            {"name": "date_of_birth", "label": "Date of Birth", "type": "date", "required": False},
-            {"name": "triage_priority", "label": "Triage Priority", "type": "select", "required": True,
-             "options": ["Routine", "Urgent", "Emergency"]},
-            {"name": "status", "label": "Care Status", "type": "select", "required": True,
-             "options": ["Inquiry", "Triage", "Consultation Booked", "Treatment", "Follow-up Completed"]},
-        ],
-    },
-    "real_estate": {
-        "label": "Real Estate Brokerage CRM",
-        "default_entity": "property_lead",
-        "pipeline": ["New Inquiry", "Qualified Buyer", "Site Tour", "Offer Made", "In Escrow", "Closed Won", "Closed Lost"],
-        "fields": [
-            {"name": "full_name", "label": "Client Name", "type": "text", "required": True},
-            {"name": "phone", "label": "Phone Number", "type": "phone", "required": True},
-            {"name": "email", "label": "Email", "type": "email", "required": False},
-            {"name": "budget_max", "label": "Maximum Budget", "type": "number", "required": False},
-            {"name": "property_type", "label": "Property Type", "type": "select", "required": True,
-             "options": ["Residential Single Family", "Condo / Apartment", "Commercial", "Land"]},
-            {"name": "status", "label": "Stage", "type": "select", "required": True,
-             "options": ["New Inquiry", "Qualified Buyer", "Site Tour", "Offer Made", "In Escrow", "Closed Won", "Closed Lost"]},
-        ],
-    },
-    "ecommerce": {
-        "label": "E-Commerce Customer CRM",
-        "default_entity": "customer",
-        "pipeline": ["Prospect", "First Order", "Repeat Buyer", "VIP Member", "Churn Risk"],
-        "fields": [
-            {"name": "full_name", "label": "Customer Name", "type": "text", "required": True},
-            {"name": "email", "label": "Customer Email", "type": "email", "required": True},
-            {"name": "phone", "label": "Phone Number", "type": "phone", "required": False},
-            {"name": "total_spend", "label": "Lifetime Spend ($)", "type": "number", "required": False},
-            {"name": "customer_tier", "label": "Tier", "type": "select", "required": True,
-             "options": ["Standard", "Silver", "Gold", "Platinum"]},
-            {"name": "status", "label": "Account Status", "type": "select", "required": True,
-             "options": ["Prospect", "First Order", "Repeat Buyer", "VIP Member", "Churn Risk"]},
-        ],
-    },
-}
+# INDUSTRY_TAXONOMIES removed: CRM generation is now universal.
+# Use FieldExtractor to identify entities and fields from user description.
+# ────────────────────────────────────────────────────────────────
 
 
 class LayaSystem1:
@@ -377,12 +316,13 @@ class LayaSystem1:
         
         This method now incorporates the normalization layer to handle custom columns
         and statuses that may have been provided in raw_data.
+        
+        C2 Fix: No longer depends on INDUSTRY_TAXONOMIES for defaults.
         """
         industry = cls.detect_industry(prompt)
-        tax = INDUSTRY_TAXONOMIES.get(industry, INDUSTRY_TAXONOMIES["saas"])
 
         # Base fields
-        name = str(raw_data.get("name") or tax["label"]).strip()[:120]
+        name = str(raw_data.get("name") or "").strip()[:120]
         if not name:
             name = f"{industry.replace('_', ' ').title()} CRM"
 
@@ -420,7 +360,8 @@ class LayaSystem1:
                 if s_str and s_str not in clean_stages:
                     clean_stages.append(s_str)
         if not clean_stages:
-            clean_stages = list(tax["pipeline"])
+            # Generate default stages based on industry
+            clean_stages = cls._generate_pipeline_stages(industry, prompt.lower())
 
         # Entities
         raw_entities = raw_data.get("entities")
@@ -492,12 +433,27 @@ class LayaSystem1:
                     "fields": clean_fields,
                 })
 
-        # Ensure at least one entity exists
+        # Ensure at least one entity exists with sensible defaults
         if not clean_entities:
             clean_entities = [{
-                "name": tax["default_entity"],
-                "label": tax["default_entity"].replace("_", " ").title(),
-                "fields": list(tax["fields"]),
+                "name": "record",
+                "label": "Record",
+                "fields": [
+                    {
+                        "name": "name",
+                        "label": "Name",
+                        "type": "text",
+                        "required": True,
+                        "options": None,
+                    },
+                    {
+                        "name": "status",
+                        "label": "Status",
+                        "type": "select",
+                        "required": True,
+                        "options": ["New", "Active", "Completed"],
+                    },
+                ],
             }]
 
         config = {
@@ -514,22 +470,75 @@ class LayaSystem1:
 
     @classmethod
     def generate_scaffold_config(cls, prompt: str) -> dict[str, Any]:
-        """Generate a complete schema-valid CRM configuration deterministically."""
+        """Generate a complete schema-valid CRM configuration deterministically.
+        
+        C2 Fix: No longer depends on INDUSTRY_TAXONOMIES.
+        Generates CRM dynamically from user prompt instead of predefined templates.
+        """
         cls.validate_prompt_safety(prompt)
         industry = cls.detect_industry(prompt)
-        tax = INDUSTRY_TAXONOMIES.get(industry, INDUSTRY_TAXONOMIES["saas"])
 
-        # Determine custom entity name if specified
-        entity_name = tax["default_entity"]
-        p_lower = prompt.lower()
-        if "lead" in p_lower:
+        # Determine entity name from prompt keywords (flexible, not hard-coded)
+        entity_name = "record"
+        prompt_lower = prompt.lower()
+        if "lead" in prompt_lower and ("sales" in prompt_lower or "saas" in prompt_lower):
             entity_name = "lead"
-        elif "contact" in p_lower:
-            entity_name = "contact"
-        elif "property" in p_lower or "listing" in p_lower:
-            entity_name = "property_lead"
-        elif "patient" in p_lower or "client" in p_lower:
-            entity_name = "patient" if industry == "healthcare" else "client"
+        elif "patient" in prompt_lower or "medical" in prompt_lower or "healthcare" in prompt_lower:
+            entity_name = "patient"
+        elif "property" in prompt_lower or "listing" in prompt_lower or "real.estate" in prompt_lower:
+            entity_name = "property"
+        elif "customer" in prompt_lower or "commerce" in prompt_lower or "ecommerce" in prompt_lower:
+            entity_name = "customer"
+        elif "candidate" in prompt_lower or "recruitment" in prompt_lower or "hiring" in prompt_lower:
+            entity_name = "candidate"
+        elif "ticket" in prompt_lower or "support" in prompt_lower or "helpdesk" in prompt_lower:
+            entity_name = "ticket"
+        elif "order" in prompt_lower or "shipment" in prompt_lower or "logistics" in prompt_lower:
+            entity_name = "order"
+        elif "task" in prompt_lower or "project" in prompt_lower:
+            entity_name = "task"
+
+        # Determine generic fields suitable for any CRM
+        fields = [
+            {
+                "name": "name",
+                "label": "Name",
+                "type": "text",
+                "required": True,
+                "options": None,
+            },
+            {
+                "name": "email",
+                "label": "Email",
+                "type": "email",
+                "required": False,
+                "options": None,
+            },
+            {
+                "name": "phone",
+                "label": "Phone",
+                "type": "phone",
+                "required": False,
+                "options": None,
+            },
+            {
+                "name": "status",
+                "label": "Status",
+                "type": "select",
+                "required": True,
+                "options": ["New", "Active", "Completed"],
+            },
+            {
+                "name": "notes",
+                "label": "Notes",
+                "type": "textarea",
+                "required": False,
+                "options": None,
+            },
+        ]
+
+        # Generate dynamic stages based on industry
+        stages = cls._generate_pipeline_stages(industry, prompt_lower)
 
         raw = {
             "name": f"{industry.replace('_', ' ').title()} CRM",
@@ -538,12 +547,34 @@ class LayaSystem1:
                 {
                     "name": entity_name,
                     "label": entity_name.replace("_", " ").title(),
-                    "fields": tax["fields"],
+                    "fields": fields,
                 }
             ],
-            "pipeline_stages": tax["pipeline"],
+            "pipeline_stages": stages,
         }
         return cls.repair_crm_configuration(raw, prompt)
+
+    @classmethod
+    def _generate_pipeline_stages(cls, industry: str, prompt_lower: str) -> list[str]:
+        """Generate appropriate pipeline stages for the given industry."""
+        # Dynamic stage generation - not hard-coded taxonomy
+        if "saas" in industry or "sales" in industry or ("lead" in prompt_lower and "sales" in prompt_lower):
+            return ["New", "Qualified", "Proposal", "Negotiation", "Closed Won", "Closed Lost"]
+        elif "healthcare" in industry or "medical" in industry:
+            return ["Inquiry", "Triage", "Consultation", "Treatment", "Follow-up", "Discharged"]
+        elif "real_estate" in industry or "property" in industry:
+            return ["Inquiry", "Qualified", "Site Tour", "Offer", "In Escrow", "Closed", "Withdrawn"]
+        elif "ecommerce" in industry or "commerce" in industry:
+            return ["Prospect", "First Order", "Active", "Repeat", "VIP", "Inactive"]
+        elif "recruitment" in industry or "hiring" in industry:
+            return ["Applied", "Screened", "Interview", "Offer", "Hired", "Rejected"]
+        elif "support" in industry or "helpdesk" in industry:
+            return ["Open", "In Progress", "Pending", "Resolved", "Closed"]
+        elif "logistics" in industry or "shipping" in industry:
+            return ["Pending", "Processing", "Shipped", "In Transit", "Delivered", "Returned"]
+        else:
+            # Generic fallback
+            return ["Pending", "In Progress", "Review", "Completed"]
 
     @classmethod
     def generate_custom_crm_from_answers(

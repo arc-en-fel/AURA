@@ -24,10 +24,20 @@ def _sanitize_string(value: str) -> str:
 
 
 def find_entity(config: CRMConfiguration, entity_name: str) -> CRMEntity | None:
-    """Find an entity definition by machine name."""
+    """Find an entity definition by machine name or label, case-insensitively."""
+    if not config.entities:
+        return None
     for entity in config.entities:
         if entity.name == entity_name:
             return entity
+    norm_target = entity_name.lower().strip().replace(" ", "_").replace("-", "_")
+    for entity in config.entities:
+        name = entity.name.lower().strip().replace(" ", "_").replace("-", "_")
+        label = (entity.label or "").lower().strip().replace(" ", "_").replace("-", "_")
+        if name == norm_target or label == norm_target:
+            return entity
+    if len(config.entities) == 1:
+        return config.entities[0]
     return None
 
 
@@ -88,7 +98,7 @@ def _validate_field_value(field: CRMField, value: Any) -> str | None:
         return None
 
     match field.type:
-        case "text" | "textarea" | "phone":
+        case "text" | "textarea" | "phone" | "url":
             if not isinstance(value, str):
                 return f"Field '{field.name}' must be a string."
             if len(value) > 10000:
@@ -98,19 +108,21 @@ def _validate_field_value(field: CRMField, value: Any) -> str | None:
                 return f"Field '{field.name}' must be a string."
             if value and not _EMAIL_RE.match(value):
                 return f"Field '{field.name}' is not a valid email address."
-        case "number":
+        case "number" | "currency":
             if not isinstance(value, (int, float)):
                 return f"Field '{field.name}' must be a number."
         case "date":
             if not isinstance(value, str):
                 return f"Field '{field.name}' must be a date string."
-            # Basic ISO date format check
             if not re.match(r"^\d{4}-\d{2}-\d{2}", value):
                 return f"Field '{field.name}' must be a valid date (YYYY-MM-DD)."
+        case "datetime":
+            if not isinstance(value, str):
+                return f"Field '{field.name}' must be a datetime string."
         case "boolean":
             if not isinstance(value, bool):
                 return f"Field '{field.name}' must be a boolean."
-        case "select":
+        case "select" | "status":
             if not isinstance(value, str):
                 return f"Field '{field.name}' must be a string."
             if field.options and value not in field.options:

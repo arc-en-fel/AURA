@@ -231,6 +231,44 @@ class CRMRepository:
         )
         return result.data or [], total
 
+    def count_records(self, crm_id: str, entity_name: str | None = None) -> int:
+        """Count non-deleted records for a CRM entity (or all entities in CRM if None)."""
+        query = (
+            self._client.table("records")
+            .select("id", count="exact")
+            .eq("crm_id", crm_id)
+            .is_("deleted_at", "null")
+        )
+        if entity_name:
+            query = query.eq("entity_name", entity_name)
+        result = query.execute()
+        return result.count or 0
+
+    def get_all_records(self, crm_id: str, entity_name: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+        """Get non-deleted records for analytics aggregation."""
+        query = (
+            self._client.table("records")
+            .select("*")
+            .eq("crm_id", crm_id)
+            .is_("deleted_at", "null")
+            .order("created_at", desc=True)
+            .limit(limit)
+        )
+        if entity_name:
+            query = query.eq("entity_name", entity_name)
+        result = query.execute()
+        return result.data or []
+
+    def count_records_by_field(self, crm_id: str, entity_name: str, field_name: str) -> list[dict[str, Any]]:
+        """Count non-deleted records grouped by a JSON data field value."""
+        records = self.get_all_records(crm_id, entity_name)
+        counts: dict[str, int] = {}
+        for r in records:
+            data = r.get("data", {})
+            val = str(data.get(field_name, "Unassigned"))
+            counts[val] = counts.get(val, 0) + 1
+        return [{"value": k, "count": v} for k, v in counts.items()]
+
     def get_record(self, record_id: str, crm_id: str, entity_name: str) -> dict[str, Any] | None:
         """Get a single non-deleted record."""
         result = (

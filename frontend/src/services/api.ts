@@ -20,7 +20,6 @@ import {
   INITIAL_RECORDS,
   INITIAL_WORKFLOWS,
   INITIAL_PROPOSALS,
-  INITIAL_ANALYTICS,
 } from './mockData';
 
 const env = (typeof import.meta !== 'undefined' && import.meta.env) ? import.meta.env : (typeof process !== 'undefined' ? process.env : {}) as Record<string, string>;
@@ -35,104 +34,76 @@ class MockBackendStorage {
   proposals: EvolutionProposal[] = [...INITIAL_PROPOSALS];
 
   generateCRM(prompt: string): GenerateCRMResponse {
-    const isHealthcare = prompt.toLowerCase().includes('health') || prompt.toLowerCase().includes('clinic') || prompt.toLowerCase().includes('patient');
-    const isRealEstate = prompt.toLowerCase().includes('real estate') || prompt.toLowerCase().includes('property');
+    const cleanPrompt = prompt.trim();
+    // Dynamically derive CRM title
+    const titleMatch = cleanPrompt.match(/(?:create|build|generate|make)\s+(?:a|an)?\s*([a-zA-Z0-9\s_-]+?)(?:crm|\.|$)/i);
+    const rawName = titleMatch ? titleMatch[1].trim() : cleanPrompt.slice(0, 30);
+    const crmName = rawName.length > 3 ? `${rawName} CRM` : 'Custom Dynamic CRM';
 
-    if (isHealthcare) {
-      return {
-        configuration: {
-          schema_version: '1.0',
-          name: 'Clinic & Patient Care CRM',
-          industry: 'healthcare',
-          entities: [
-            {
-              name: 'patient',
-              label: 'Patient',
-              fields: [
-                { name: 'full_name', label: 'Patient Name', type: 'text', required: true },
-                { name: 'email', label: 'Email Address', type: 'email', required: false },
-                { name: 'phone', label: 'Primary Phone', type: 'phone', required: true },
-                { name: 'date_of_birth', label: 'Date of Birth', type: 'date', required: true },
-                { name: 'blood_group', label: 'Blood Group', type: 'select', required: false, options: ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'] },
-                { name: 'emergency_contact', label: 'Emergency Contact Phone', type: 'phone', required: false },
-                { name: 'status', label: 'Admission Status', type: 'select', required: true, options: ['Registered', 'Triage', 'In-Consultation', 'Admitted', 'Discharged'] },
-              ],
-            },
-            {
-              name: 'appointment',
-              label: 'Appointment',
-              fields: [
-                { name: 'patient_id', label: 'Patient Reference', type: 'text', required: true },
-                { name: 'doctor_name', label: 'Doctor', type: 'text', required: true },
-                { name: 'appointment_date', label: 'Appointment Date', type: 'date', required: true },
-                { name: 'status', label: 'Status', type: 'select', required: true, options: ['Scheduled', 'Completed', 'Cancelled', 'No-Show'] },
-                { name: 'notes', label: 'Doctor Notes', type: 'textarea', required: false },
-              ],
-            },
-          ],
-          pipeline_stages: ['Registered', 'Triage', 'In-Consultation', 'Admitted', 'Discharged'],
-        },
-        warnings: [],
-      };
+    // Extract potential fields from prompt
+    const lines = cleanPrompt.split(/[\n,;]+/);
+    const candidateFields: Array<import('@/types/crm').CRMField> = [];
+    const candidateStages: string[] = [];
+
+    // Check if stages are specified (e.g. Statuses: A, B, C or Stages: A -> B -> C)
+    const stageMatch = cleanPrompt.match(/(?:statuses|stages|pipeline):\s*([^\n\r]+)/i);
+    if (stageMatch) {
+      stageMatch[1].split(/[,\->]+/).forEach((s) => {
+        const trimmed = s.trim();
+        if (trimmed && !candidateStages.includes(trimmed)) candidateStages.push(trimmed);
+      });
     }
 
-    if (isRealEstate) {
-      return {
-        configuration: {
-          schema_version: '1.0',
-          name: 'Premier Realty CRM',
-          industry: 'real_estate',
-          entities: [
-            {
-              name: 'property_lead',
-              label: 'Property Buyer Lead',
-              fields: [
-                { name: 'full_name', label: 'Buyer Name', type: 'text', required: true },
-                { name: 'email', label: 'Email', type: 'email', required: true },
-                { name: 'phone', label: 'Phone Number', type: 'phone', required: true },
-                { name: 'budget_max', label: 'Max Budget ($)', type: 'number', required: false },
-                { name: 'preferred_location', label: 'Target City / Area', type: 'text', required: true },
-                { name: 'status', label: 'Pipeline Stage', type: 'select', required: true, options: ['Inquiry', 'Site Visit', 'Offer Made', 'Under Escrow', 'Closed Won', 'Lost'] },
-              ],
-            },
-            {
-              name: 'listing',
-              label: 'Property Listing',
-              fields: [
-                { name: 'title', label: 'Listing Title', type: 'text', required: true },
-                { name: 'price', label: 'Asking Price ($)', type: 'number', required: true },
-                { name: 'property_type', label: 'Property Type', type: 'select', required: true, options: ['Apartment', 'Villa', 'Commercial', 'Land'] },
-                { name: 'is_featured', label: 'Featured Listing', type: 'boolean', required: false },
-              ],
-            },
-          ],
-          pipeline_stages: ['Inquiry', 'Site Visit', 'Offer Made', 'Under Escrow', 'Closed Won', 'Lost'],
-        },
-        warnings: [],
-      };
+    // Common field extraction from prompt text
+    for (const line of lines) {
+      const trimmed = line.trim().replace(/^[-*•\d.]+\s*/, '');
+      if (trimmed.length > 2 && trimmed.length < 40 && !trimmed.toLowerCase().includes('crm')) {
+        const fieldKey = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+        if (fieldKey && !candidateFields.some((f) => f.name === fieldKey)) {
+          let fieldType: any = 'text';
+          if (fieldKey.includes('email')) fieldType = 'email';
+          else if (fieldKey.includes('phone') || fieldKey.includes('tel')) fieldType = 'phone';
+          else if (fieldKey.includes('revenue') || fieldKey.includes('price') || fieldKey.includes('budget') || fieldKey.includes('cost') || fieldKey.includes('value')) fieldType = 'currency';
+          else if (fieldKey.includes('score') || fieldKey.includes('count') || fieldKey.includes('time') || fieldKey.includes('age') || fieldKey.includes('frequency')) fieldType = 'number';
+          else if (fieldKey.includes('date') || fieldKey.includes('dob')) fieldType = 'date';
+          else if (fieldKey.includes('status') || fieldKey.includes('stage')) fieldType = 'status';
+          else if (fieldKey.includes('priority') || fieldKey.includes('segment') || fieldKey.includes('type') || fieldKey.includes('source')) fieldType = 'select';
+
+          candidateFields.push({
+            name: fieldKey,
+            label: trimmed.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+            type: fieldType,
+            required: candidateFields.length === 0,
+            options: fieldType === 'select' ? ['Tier 1', 'Tier 2', 'General'] : undefined,
+          });
+        }
+      }
     }
 
-    // Default Sales / Custom CRM
+    // Ensure we have reasonable fallback fields if prompt was short
+    if (candidateFields.length === 0) {
+      candidateFields.push(
+        { name: 'name', label: 'Name', type: 'text', required: true },
+        { name: 'status', label: 'Status', type: 'status', required: true },
+        { name: 'notes', label: 'Notes', type: 'textarea', required: false }
+      );
+    }
+
+    const stages = candidateStages.length > 0 ? candidateStages : ['New', 'In Progress', 'Completed'];
+
     return {
       configuration: {
         schema_version: '1.0',
-        name: 'AI Generated Sales CRM',
-        industry: 'general_sales',
+        name: crmName,
+        industry: 'custom',
         entities: [
           {
-            name: 'lead',
-            label: 'Sales Lead',
-            fields: [
-              { name: 'full_name', label: 'Contact Name', type: 'text', required: true },
-              { name: 'email', label: 'Email', type: 'email', required: true },
-              { name: 'company', label: 'Company', type: 'text', required: false },
-              { name: 'deal_value', label: 'Estimated Deal Value ($)', type: 'number', required: false },
-              { name: 'status', label: 'Deal Stage', type: 'select', required: true, options: ['New', 'Contacted', 'Qualified', 'Negotiation', 'Won', 'Lost'] },
-              { name: 'source', label: 'Lead Source', type: 'select', required: true, options: ['Website', 'Referral', 'Social Media', 'Direct Outreach'] },
-            ],
+            name: candidateFields[0].name.includes('name') ? candidateFields[0].name.replace(/_name$/, '') || 'record' : 'record',
+            label: candidateFields[0].label.replace(/\s*Name$/i, '') || 'Record',
+            fields: candidateFields,
           },
         ],
-        pipeline_stages: ['New', 'Contacted', 'Qualified', 'Negotiation', 'Won', 'Lost'],
+        pipeline_stages: stages,
       },
       warnings: [],
     };
@@ -344,9 +315,10 @@ export const api = {
     data: Record<string, unknown>,
     source?: string
   ): Promise<CRMRecord> {
+    let result: CRMRecord;
     if (getUseMockMode()) {
       await new Promise((r) => setTimeout(r, 400));
-      const newRecord: CRMRecord = {
+      result = {
         id: crypto.randomUUID(),
         crm_id: crmId,
         entity_name: entityName,
@@ -355,13 +327,15 @@ export const api = {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
-      mockStorage.records.unshift(newRecord);
-      return newRecord;
+      mockStorage.records.unshift(result);
+    } else {
+      result = await request<CRMRecord>(`/crm/${crmId}/records/${entityName}`, {
+        method: 'POST',
+        body: JSON.stringify({ data, source }),
+      });
     }
-    return await request<CRMRecord>(`/crm/${crmId}/records/${entityName}`, {
-      method: 'POST',
-      body: JSON.stringify({ data, source }),
-    });
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('records-changed'));
+    return result;
   },
 
   // 7. Update Record
@@ -371,6 +345,7 @@ export const api = {
     recordId: string,
     data: Record<string, unknown>
   ): Promise<CRMRecord> {
+    let result: CRMRecord;
     if (getUseMockMode()) {
       await new Promise((r) => setTimeout(r, 300));
       const idx = mockStorage.records.findIndex((r) => r.id === recordId);
@@ -380,15 +355,18 @@ export const api = {
         data: { ...mockStorage.records[idx].data, ...data },
         updated_at: new Date().toISOString(),
       };
-      return mockStorage.records[idx];
+      result = mockStorage.records[idx];
+    } else {
+      result = await request<CRMRecord>(
+        `/crm/${crmId}/records/${entityName}/${recordId}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ data }),
+        }
+      );
     }
-    return await request<CRMRecord>(
-      `/crm/${crmId}/records/${entityName}/${recordId}`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({ data }),
-      }
-    );
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('records-changed'));
+    return result;
   },
 
   // 8. Delete Record
@@ -397,17 +375,21 @@ export const api = {
     entityName: string,
     recordId: string
   ): Promise<{ deleted: boolean }> {
+    let result: { deleted: boolean };
     if (getUseMockMode()) {
       await new Promise((r) => setTimeout(r, 250));
       mockStorage.records = mockStorage.records.filter((r) => r.id !== recordId);
-      return { deleted: true };
+      result = { deleted: true };
+    } else {
+      result = await request<{ deleted: boolean }>(
+        `/crm/${crmId}/records/${entityName}/${recordId}`,
+        {
+          method: 'DELETE',
+        }
+      );
     }
-    return await request<{ deleted: boolean }>(
-      `/crm/${crmId}/records/${entityName}/${recordId}`,
-      {
-        method: 'DELETE',
-      }
-    );
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('records-changed'));
+    return result;
   },
 
   // 9. Import CSV
@@ -499,36 +481,89 @@ export const api = {
   async getAnalytics(crmId: string): Promise<AnalyticsData> {
     if (getUseMockMode()) {
       await new Promise((r) => setTimeout(r, 300));
-      // Compute live mock stats from current records
-      const leads = mockStorage.records.filter((r) => r.crm_id === crmId);
+      const crm = mockStorage.crms.find((c) => c.crm_id === crmId);
+      const records = mockStorage.records.filter((r) => r.crm_id === crmId);
+      const total = records.length;
+      const stages = crm?.configuration?.pipeline_stages || ['New', 'In Progress', 'Completed'];
+      const primaryEntity = crm?.configuration?.entities?.[0];
+
+      // Stage counts with all configured stages represented
       const stageCounts: Record<string, number> = {};
-      const sourceCounts: Record<string, number> = {};
-      let qualified = 0;
-      let won = 0;
-
-      leads.forEach((l) => {
-        const st = String(l.data['status'] || 'New');
-        stageCounts[st] = (stageCounts[st] || 0) + 1;
-        if (st.toLowerCase().includes('qualif')) qualified++;
-        if (st.toLowerCase().includes('won')) won++;
-
-        const src = String(l.data['source'] || 'Website');
-        sourceCounts[src] = (sourceCounts[src] || 0) + 1;
+      stages.forEach((s) => { stageCounts[s] = 0; });
+      records.forEach((r) => {
+        const val = String(r.data['status'] || r.data['stage'] || stages[0] || 'New');
+        stageCounts[val] = (stageCounts[val] || 0) + 1;
       });
 
-      const total = leads.length || INITIAL_ANALYTICS.total_leads || 0;
-      const wonCount = won || 0;
+      const byStage = Object.entries(stageCounts).map(([value, count]) => ({
+        value,
+        count,
+        percentage: total > 0 ? Number(((count / total) * 100).toFixed(1)) : 0,
+      }));
+
+      // Categorical & Numeric metrics
+      const numericMetrics: Record<string, any> = {};
+      const categoricalMetrics: Record<string, any> = {};
+      const kpiCards: Array<{ label: string; value: string | number; subtitle: string }> = [];
+
+      if (primaryEntity) {
+        for (const field of primaryEntity.fields) {
+          if (field.type === 'number' || field.type === 'currency') {
+            const vals = records
+              .map((r) => Number(r.data[field.name]))
+              .filter((v) => !isNaN(v) && v !== null && v !== undefined);
+            if (vals.length > 0) {
+              const totalVal = vals.reduce((a, b) => a + b, 0);
+              const avgVal = totalVal / vals.length;
+              numericMetrics[field.name] = {
+                label: field.label,
+                count: vals.length,
+                total: Number(totalVal.toFixed(2)),
+                avg: Number(avgVal.toFixed(2)),
+                min: Math.min(...vals),
+                max: Math.max(...vals),
+              };
+              if (kpiCards.length < 2) {
+                kpiCards.push({
+                  label: `Avg ${field.label}`,
+                  value: field.type === 'currency' ? `$${avgVal.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : avgVal.toFixed(1),
+                  subtitle: `Total: ${field.type === 'currency' ? '$' : ''}${totalVal.toLocaleString()}`,
+                });
+              }
+            }
+          } else if (field.type === 'select' && field.name !== 'status') {
+            const distMap: Record<string, number> = {};
+            records.forEach((r) => {
+              const v = String(r.data[field.name] || 'Unknown');
+              distMap[v] = (distMap[v] || 0) + 1;
+            });
+            categoricalMetrics[field.name] = {
+              label: field.label,
+              distribution: Object.entries(distMap).map(([val, cnt]) => ({
+                value: val,
+                count: cnt,
+                percentage: total > 0 ? Number(((cnt / total) * 100).toFixed(1)) : 0,
+              })),
+            };
+          }
+        }
+      }
+
       return {
+        total_records: total,
         total_leads: total,
-        qualified_leads: qualified || INITIAL_ANALYTICS.qualified_leads,
-        won_leads: wonCount,
-        conversion_rate: total > 0 ? Number((wonCount / total).toFixed(4)) : 0.0,
-        by_source: Object.keys(sourceCounts).length > 0
-          ? Object.entries(sourceCounts).map(([value, count]) => ({ value, count }))
-          : INITIAL_ANALYTICS.by_source,
-        by_stage: Object.keys(stageCounts).length > 0
-          ? Object.entries(stageCounts).map(([value, count]) => ({ value, count }))
-          : INITIAL_ANALYTICS.by_stage,
+        by_stage: byStage,
+        by_source: [],
+        numeric_metrics: numericMetrics,
+        categorical_metrics: categoricalMetrics,
+        kpi_cards: kpiCards,
+        schema_info: {
+          primary_entity_name: primaryEntity?.name || 'record',
+          primary_entity_label: primaryEntity?.label || 'Record',
+          stage_field_name: 'status',
+          pipeline_stages: stages,
+          available_fields: primaryEntity ? primaryEntity.fields.map((f) => f.name) : [],
+        },
       };
     }
     return await request<AnalyticsData>(`/crm/${crmId}/analytics`, {
@@ -785,19 +820,66 @@ export const api = {
     if (getUseMockMode()) {
       await new Promise((r) => setTimeout(r, 700));
       const q = (messages[messages.length - 1]?.content ?? '').toLowerCase();
-      if (q.includes('evolution') || q.includes('improve') || q.includes('proposal')) {
-        return { reply: 'To propose improvements, use the Evolution Center. AURA will generate an AI-powered change proposal for your review.', nav_route: '/evolution', nav_label: 'Go to Evolution Center', fallback: true };
+
+      // Detect action intents and return TOOL_CALL responses
+      const crm = crmId ? mockStorage.crms.find((c) => c.crm_id === crmId) : null;
+      const entityName = crm?.configuration?.entities?.[0]?.name || 'record';
+
+      // Create record action
+      if (q.match(/\b(create|add|new|insert)\b.*\b(record|entry|item|lead|customer|ticket|candidate)\b/)) {
+        const fields = crm?.configuration?.entities?.[0]?.fields || [];
+        const mockData: Record<string, any> = {};
+        fields.forEach((f) => {
+          if (f.type === 'text') mockData[f.name] = 'Sample Value';
+          else if (f.type === 'email') mockData[f.name] = 'sample@example.com';
+          else if (f.type === 'number' || f.type === 'currency') mockData[f.name] = 100;
+          else if (f.type === 'select' || f.type === 'status') mockData[f.name] = f.options?.[0] || 'New';
+          else if (f.type === 'boolean') mockData[f.name] = false;
+          else if (f.type === 'date') mockData[f.name] = new Date().toISOString().split('T')[0];
+          else mockData[f.name] = '';
+        });
+        return {
+          reply: `Creating a new ${entityName} record for you. TOOL_CALL: {"name": "create_record", "arguments": {"entity_name": "${entityName}", "data": ${JSON.stringify(mockData)}}}`,
+          nav_route: null, nav_label: null, fallback: true,
+        };
       }
-      if (q.includes('workflow') || q.includes('automation')) {
-        return { reply: 'Workflows fire automatically when a record event occurs. You can view and manage them on the Workflows page.', nav_route: '/workflows', nav_label: 'View Workflows', fallback: true };
+
+      // Delete record action
+      if (q.match(/\b(delete|remove|trash)\b.*\b(record|entry|item)\b/)) {
+        return {
+          reply: `To delete a record, please specify the record ID or name. You can also delete records directly from the Records page.`,
+          nav_route: '/records', nav_label: 'Open Records', fallback: true,
+        };
       }
-      if (q.includes('record') || q.includes('lead') || q.includes('import')) {
-        return { reply: 'Records are stored dynamically using your CRM schema. You can create, edit, and import them on the Records page.', nav_route: '/records', nav_label: 'Open Records', fallback: true };
+
+      // Update record action
+      if (q.match(/\b(update|change|modify|edit|set)\b.*\b(record|entry|status|field|value)\b/)) {
+        return {
+          reply: `To update a record, specify the record you want to change and what field to update. You can also edit records directly from the Records page.`,
+          nav_route: '/records', nav_label: 'Open Records', fallback: true,
+        };
       }
-      if (q.includes('analytics') || q.includes('conversion') || q.includes('metric')) {
-        return { reply: 'AURA tracks total leads, conversion rate, and pipeline stage breakdowns on the Analytics page.', nav_route: '/analytics', nav_label: 'View Analytics', fallback: true };
+
+      // Add field action
+      if (q.match(/\b(add|create|new)\b.*\b(field|column)\b/)) {
+        return {
+          reply: `I'll add a new field. TOOL_CALL: {"name": "add_crm_field", "arguments": {"entity_name": "${entityName}", "field_name": "new_field", "field_type": "text", "label": "New Field"}}`,
+          nav_route: null, nav_label: null, fallback: true,
+        };
       }
-      return { reply: "I can help with questions about your CRM configuration, records, workflows, analytics, and evolution proposals. What would you like to know?", nav_route: null, nav_label: null, fallback: true };
+
+      // Analytics question
+      if (q.includes('analytics') || q.includes('metric') || q.includes('stats') || q.includes('how many')) {
+        return { reply: 'You can view all dynamic analytics — pipeline stages, numeric aggregations, and KPI cards — on the Analytics page.', nav_route: '/analytics', nav_label: 'View Analytics', fallback: true };
+      }
+
+      // Schema / fields question
+      if (q.includes('field') || q.includes('schema') || q.includes('what') && q.includes('track')) {
+        const fieldList = crm?.configuration?.entities?.[0]?.fields?.map((f) => `${f.label} (${f.type})`).join(', ') || 'No fields configured';
+        return { reply: `Your CRM tracks these fields: ${fieldList}`, nav_route: null, nav_label: null, fallback: true };
+      }
+
+      return { reply: "I can help with your CRM — ask me to create records, view analytics, add fields, or explain your pipeline. What would you like to do?", nav_route: null, nav_label: null, fallback: true };
     }
     return await request<{ reply: string; nav_route?: string | null; nav_label?: string | null; fallback?: boolean }>(
       '/copilot/chat',
@@ -825,7 +907,7 @@ export const api = {
       };
     }
 
-    return await request<any>(
+    const result = await request<any>(
       '/copilot/tool-call',
       {
         method: 'POST',
@@ -836,5 +918,14 @@ export const api = {
         }),
       },
     );
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('records-changed'));
+      if (['add_crm_field', 'delete_crm_field', 'add_crm_stage', 'delete_crm_stage', 'update_crm_field'].includes(toolCallRequest.tool_name)) {
+        window.dispatchEvent(new CustomEvent('crm-config-changed'));
+      }
+    }
+
+    return result;
   },
 };

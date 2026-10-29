@@ -51,7 +51,7 @@ class GenerateCRMRequest(StrictModel):
 
 
 FieldType = Literal[
-    "text", "textarea", "email", "number", "date", "boolean", "select", "phone"
+    "text", "textarea", "email", "number", "currency", "date", "datetime", "boolean", "select", "phone", "url", "status"
 ]
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 RESERVED_FIELDS = {
@@ -246,12 +246,17 @@ class WorkflowData(StrictModel):
 
 
 class AnalyticsData(StrictModel):
-    total_leads: int = Field(ge=0)
-    qualified_leads: int = Field(ge=0)
-    won_leads: int = Field(ge=0)
-    conversion_rate: float = Field(ge=0, le=1)
-    by_source: list[dict[str, Any]] = Field(default_factory=list)
-    by_stage: list[dict[str, Any]] = Field(default_factory=list)
+    """Universal analytics schema supporting any CRM type.
+    
+    total_records: total records in CRM
+    records_by_stage: distribution across pipeline stages (if applicable)
+    records_by_field: categorical metrics for select/status fields
+    custom_metrics: optional numeric aggregations (sum, avg, min, max) for numeric fields
+    """
+    total_records: int = Field(ge=0)
+    records_by_stage: list[dict[str, Any]] = Field(default_factory=list)
+    records_by_field: list[dict[str, Any]] = Field(default_factory=list)
+    custom_metrics: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class EvolutionObjectiveRequest(StrictModel):

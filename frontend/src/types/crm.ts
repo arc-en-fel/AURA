@@ -3,13 +3,15 @@ export type FieldType =
   | 'textarea'
   | 'email'
   | 'number'
+  | 'currency'
   | 'date'
   | 'datetime'
   | 'boolean'
   | 'select'
   | 'multi_select'
   | 'phone'
-  | 'url';
+  | 'url'
+  | 'status';
 
 export interface CRMField {
   name: string;
@@ -119,27 +121,61 @@ export interface CreateWorkflowPayload {
 
 export interface AnalyticsMetricItem {
   value?: string;
+  name?: string;
   count: number;
   percentage?: number;
   [key: string]: unknown;
 }
 
+export interface NumericMetricItem {
+  field_name: string;
+  field_label: string;
+  type: 'number' | 'currency';
+  total: number;
+  average: number;
+  min: number;
+  max: number;
+}
+
+export interface CategoricalMetricItem {
+  field_name: string;
+  field_label: string;
+  distribution: AnalyticsMetricItem[];
+}
+
+export interface KPICardItem {
+  id: string;
+  title: string;
+  value: string | number;
+  subtitle?: string;
+  format?: 'number' | 'currency' | 'percent' | 'text';
+}
+
 export interface AnalyticsData {
-  // Old format (backward compatibility)
+  // Universal metrics
+  total_records?: number;
+  entity_name?: string;
+  entity_label?: string;
+  by_stage?: AnalyticsMetricItem[];
+  by_source?: AnalyticsMetricItem[];
+  numeric_metrics?: NumericMetricItem[] | Record<string, any>;
+  categorical_metrics?: CategoricalMetricItem[] | Record<string, any>;
+  kpi_cards?: Array<KPICardItem | { id?: string; title?: string; label?: string; value: string | number; subtitle?: string; format?: string }>;
+  schema_info?: {
+    primary_entity_name?: string;
+    primary_entity_label?: string;
+    pipeline_stages?: string[];
+    stage_field_name?: string | null;
+    source_field_name?: string | null;
+    available_fields?: string[];
+    categorical_fields?: Array<{ name: string; label: string }>;
+    numeric_fields?: Array<{ name: string; label: string; type: string }>;
+  };
+  // Backward compatibility
   total_leads?: number;
   qualified_leads?: number;
   won_leads?: number;
   conversion_rate?: number;
-  // New format (dynamic)
-  total_records?: number;
-  by_source: AnalyticsMetricItem[];
-  by_stage: AnalyticsMetricItem[];
-  schema_info?: {
-    primary_entity_name?: string;
-    pipeline_stages?: string[];
-    stage_field_name?: string | null;
-    source_field_name?: string | null;
-  };
 }
 
 export type EvolutionObjective =

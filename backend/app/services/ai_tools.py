@@ -38,67 +38,80 @@ class CRMSchemaTools:
     # ── Record CRUD Tools ──────────────────────────────────────────
 
     @staticmethod
+    def _resolve_entity(config: dict[str, Any], entity_identifier: str | None) -> dict[str, Any] | None:
+        """Resolve an entity from configuration by name, id, or label, or fallback to first entity."""
+        entities = config.get("entities", [])
+        if not entities:
+            return None
+        if not entity_identifier:
+            return entities[0]
+        norm = str(entity_identifier).lower().strip().replace(" ", "_").replace("-", "_")
+        for e in entities:
+            name = str(e.get("name", "")).lower().strip().replace(" ", "_").replace("-", "_")
+            label = str(e.get("label", "")).lower().strip().replace(" ", "_").replace("-", "_")
+            if name == norm or label == norm:
+                return e
+        # If no match but only one entity exists, use it
+        return entities[0]
+
+    @staticmethod
     def create_record(
         crm_id: str,
         owner_id: str,
-        entity_name: str,
-        data: dict[str, Any],
+        entity_name: str | None = None,
+        entity_id: str | None = None,
+        data: dict[str, Any] | None = None,
         source: str | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
-        """Create a new record in the CRM.
-        
-        Args:
-            crm_id: The CRM ID
-            owner_id: The owner user ID (for authorization)
-            entity_name: Name of the entity (e.g., 'lead', 'contact')
-            data: Record field values
-            source: Optional source tag (e.g., 'Website', 'Email', 'Manual')
-            
-        Returns:
-            Created record data as dict
-            
-        Raises:
-            ValueError: If CRM/entity not found or validation fails
-        """
+        """Create a new record in the CRM dynamically without hardcoding entity or fields."""
         repo = CRMRepository()
         crm = repo.get_crm(crm_id, owner_id)
         if not crm:
             return {
                 "success": False,
                 "error_code": "NOT_FOUND",
-                "error_message": "CRM not found or unauthorized"
+                "error_message": "CRM not found or unauthorized",
             }
-        
-        # Validate entity exists
+
         config = crm.get("configuration", {})
-        entities = config.get("entities", [])
-        entity = next((e for e in entities if e["name"] == entity_name), None)
-        
+        target_name = entity_name or entity_id or kwargs.get("entity")
+        entity = CRMSchemaTools._resolve_entity(config, target_name)
         if not entity:
             return {
                 "success": False,
                 "error_code": "INVALID_ENTITY",
-                "error_message": f"Entity '{entity_name}' not found"
+                "error_message": f"Entity '{target_name}' not found",
             }
-        
-        # Validate required fields
-        for field in entity.get("fields", []):
-            if field.get("required") and field["name"] not in data:
-                return {
-                    "success": False,
-                    "error_code": "MISSING_REQUIRED_FIELD",
-                    "error_message": f"Required field '{field['name']}' is missing"
-                }
-        
+
+        resolved_name = entity["name"]
+        record_data = data if data is not None else kwargs.get("changes", {})
+        if not isinstance(record_data, dict):
+            record_data = {}
+
+        # Fill any extra kwargs that match entity field names
+        field_names = {f["name"] for f in entity.get("fields", [])}
+        for k, v in kwargs.items():
+            if k in field_names and k not in record_data:
+                record_data[k] = v
+
         try:
-            result = repo.create_record(crm_id, entity_name, data, source=source)
+            result = repo.create_record(
+                crm_id=crm_id,
+                entity_name=resolved_name,
+                data=record_data,
+                source=source or "AI Copilot",
+                owner_id=owner_id,
+            )
             logger.info(
                 "[AI-TOOLS] Created record in entity '%s' for CRM %s via AI tool",
-                entity_name,
-                crm_id
+                resolved_name,
+                crm_id,
             )
             return {
                 "success": True,
+                "crm_id": crm_id,
+                "entity_name": resolved_name,
                 "data": result,
             }
         except Exception as exc:
@@ -113,45 +126,88 @@ class CRMSchemaTools:
     def update_record(
         crm_id: str,
         owner_id: str,
-        entity_name: str,
-        record_id: str,
-        data: dict[str, Any],
+        record_id: str | None = None,
+        entity_name: str | None = None,
+        entity_id: str | None = None,
+        data: dict[str, Any] | None = None,
+        changes: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
-        """Update an existing record.
-        
-        Args:
-            crm_id: The CRM ID
-            owner_id: The owner user ID (for authorization)
-            entity_name: Name of the entity
-            record_id: ID of the record to update
-            data: Fields to update (partial update OK)
-            
-        Returns:
-            Updated record data as dict
-            
-        Raises:
-            ValueError: If CRM/record not found
-        """
+        """Update an existing record dynamically."""
         repo = CRMRepository()
         crm = repo.get_crm(crm_id, owner_id)
         if not crm:
             return {
                 "success": False,
                 "error_code": "NOT_FOUND",
-                "error_message": "CRM not found or unauthorized"
+                "error_message": "CRM not found or unauthorized",
             }
-        
+
+        config = crm.get("configuration", {})
+        target_name = entity_name or entity_id or kwargs.get("entity")
+        entity = CRMSchemaTools._resolve_entity(config, target_name)
+        if not entity:
+            return {
+                "success": False,
+                "error_code": "INVALID_ENTITY",
+                "error_message": f"Entity '{target_name}' not found",
+            }
+
+        resolved_name = entity["name"]
+        update_payload = changes if changes is not None else (data if data is not None else {})
+        if not isinstance(update_payload, dict):
+            update_payload = {}
+
+        # Extra kwargs into update payload
+        field_names = {f["name"] for f in entity.get("fields", [])}
+        for k, v in kwargs.items():
+            if k in field_names and k not in update_payload:
+                update_payload[k] = v
+
+        # Locate record by ID or by search
+        target_record_id = record_id or kwargs.get("id")
+        existing_record = None
+
+        if target_record_id:
+            try:
+                UUID(str(target_record_id))
+                existing_record = repo.get_record(str(target_record_id), crm_id, resolved_name)
+            except (ValueError, TypeError):
+                # target_record_id is a search term like a name
+                pass
+
+        if not existing_record:
+            # Search records by text or name
+            items, _ = repo.list_records(crm_id, resolved_name, limit=50)
+            search_term = str(target_record_id or "").lower().strip()
+            for r in items:
+                r_data = r.get("data", {})
+                if not search_term or any(search_term in str(v).lower() for v in r_data.values()):
+                    existing_record = r
+                    target_record_id = r["id"]
+                    break
+
+        if not existing_record or not target_record_id:
+            return {
+                "success": False,
+                "error_code": "NOT_FOUND",
+                "error_message": f"Record '{target_record_id}' not found in entity '{resolved_name}'",
+            }
+
         try:
-            result = repo.update_record(crm_id, entity_name, record_id, data)
+            merged_data = {**existing_record.get("data", {}), **update_payload}
+            result = repo.update_record(str(target_record_id), crm_id, merged_data)
             logger.info(
                 "[AI-TOOLS] Updated record %s in entity '%s' for CRM %s via AI tool",
-                record_id,
-                entity_name,
-                crm_id
+                target_record_id,
+                resolved_name,
+                crm_id,
             )
             return {
                 "success": True,
-                "data": result,
+                "crm_id": crm_id,
+                "entity_name": resolved_name,
+                "data": result or merged_data,
             }
         except Exception as exc:
             logger.exception("Error updating record via AI tool")
@@ -165,43 +221,72 @@ class CRMSchemaTools:
     def delete_record(
         crm_id: str,
         owner_id: str,
-        entity_name: str,
-        record_id: str,
+        record_id: str | None = None,
+        entity_name: str | None = None,
+        entity_id: str | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
-        """Soft delete a record.
-        
-        Args:
-            crm_id: The CRM ID
-            owner_id: The owner user ID (for authorization)
-            entity_name: Name of the entity
-            record_id: ID of the record to delete
-            
-        Returns:
-            Deletion confirmation as dict
-            
-        Raises:
-            ValueError: If CRM/record not found
-        """
+        """Soft delete a record dynamically."""
         repo = CRMRepository()
         crm = repo.get_crm(crm_id, owner_id)
         if not crm:
             return {
                 "success": False,
                 "error_code": "NOT_FOUND",
-                "error_message": "CRM not found or unauthorized"
+                "error_message": "CRM not found or unauthorized",
             }
-        
+
+        config = crm.get("configuration", {})
+        target_name = entity_name or entity_id or kwargs.get("entity")
+        entity = CRMSchemaTools._resolve_entity(config, target_name)
+        if not entity:
+            return {
+                "success": False,
+                "error_code": "INVALID_ENTITY",
+                "error_message": f"Entity '{target_name}' not found",
+            }
+
+        resolved_name = entity["name"]
+        target_record_id = record_id or kwargs.get("id")
+        existing_record = None
+
+        if target_record_id:
+            try:
+                UUID(str(target_record_id))
+                existing_record = repo.get_record(str(target_record_id), crm_id, resolved_name)
+            except (ValueError, TypeError):
+                pass
+
+        if not existing_record:
+            items, _ = repo.list_records(crm_id, resolved_name, limit=50)
+            search_term = str(target_record_id or "").lower().strip()
+            for r in items:
+                r_data = r.get("data", {})
+                if search_term and any(search_term in str(v).lower() for v in r_data.values()):
+                    existing_record = r
+                    target_record_id = r["id"]
+                    break
+
+        if not existing_record or not target_record_id:
+            return {
+                "success": False,
+                "error_code": "NOT_FOUND",
+                "error_message": f"Record '{target_record_id}' not found in entity '{resolved_name}'",
+            }
+
         try:
-            repo.soft_delete_record(crm_id, entity_name, record_id)
+            repo.soft_delete_record(str(target_record_id), crm_id, resolved_name)
             logger.info(
                 "[AI-TOOLS] Deleted record %s from entity '%s' in CRM %s via AI tool",
-                record_id,
-                entity_name,
-                crm_id
+                target_record_id,
+                resolved_name,
+                crm_id,
             )
             return {
                 "success": True,
-                "data": {"deleted": True, "record_id": record_id},
+                "crm_id": crm_id,
+                "entity_name": resolved_name,
+                "data": {"deleted": True, "record_id": str(target_record_id)},
             }
         except Exception as exc:
             logger.exception("Error deleting record via AI tool")
@@ -217,29 +302,14 @@ class CRMSchemaTools:
     def add_crm_field(
         crm_id: str,
         owner_id: str,
-        field_name: str,
+        entity_name: str | None = None,
         field_type: FieldType = "text",
         label: str | None = None,
         required: bool = False,
         options: list[str] | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
-        """Add a new field to the main entity in a CRM.
-        
-        Args:
-            crm_id: The CRM ID
-            owner_id: The owner user ID (for authorization)
-            field_name: Machine-readable field name (lowercase, underscores)
-            field_type: Type of field (text, email, select, etc.)
-            label: Human-readable field label. If None, derives from field_name
-            required: Whether the field is required
-            options: For select fields, list of available options
-            
-        Returns:
-            Updated CRMConfiguration as dict
-            
-        Raises:
-            ValueError: If CRM not found, unauthorized, or invalid input
-        """
+        """Add a new field to a CRM entity."""
         repo = CRMRepository()
         crm = repo.get_crm(crm_id, owner_id)
         if not crm:
@@ -250,11 +320,14 @@ class CRMSchemaTools:
             label = field_name.replace("_", " ").title()
         
         try:
-            entity_name = crm["configuration"]["entities"][0]["name"]
+            target_entity = CRMSchemaTools._resolve_entity(
+                crm["configuration"], entity_name or kwargs.get("entity") or kwargs.get("entity_id")
+            )
+            resolved_entity_name = target_entity["name"] if target_entity else crm["configuration"]["entities"][0]["name"]
             
             updated_config = CRMSchemaEditor.add_field(
                 crm["configuration"],
-                entity_name=entity_name,
+                entity_name=resolved_entity_name,
                 field_name=field_name,
                 field_label=label,
                 field_type=field_type,
