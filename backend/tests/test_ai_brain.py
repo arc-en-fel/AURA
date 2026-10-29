@@ -23,7 +23,6 @@ from app.services.ai_provider import (
 )
 from app.services.laya_system1 import (
     LayaSystem1,
-    INDUSTRY_TAXONOMIES,
 )
 from app.services.laya_runtime import EvolutionDecision, GenerationDecision, LayaDecisionEngine
 from app.services.ollama_provider import OllamaAIProvider
@@ -115,8 +114,17 @@ class TestLayaSystem1:
         assert validated.pipeline_stages == ["Prospect", "Closed Won"]
 
     def test_generate_scaffold_config(self):
-        for ind, tax in INDUSTRY_TAXONOMIES.items():
-            config_dict = LayaSystem1.generate_scaffold_config(f"Create a high quality {ind} CRM")
+        # C2 Fix: Test scaffold generation for various industries without INDUSTRY_TAXONOMIES
+        industries = [
+            "Create a high quality saas CRM",
+            "Create a high quality healthcare CRM",
+            "Create a high quality real_estate CRM",
+            "Create a high quality ecommerce CRM",
+            "Create a custom logistics CRM",
+        ]
+        
+        for prompt in industries:
+            config_dict = LayaSystem1.generate_scaffold_config(prompt)
             config = CRMConfiguration(**config_dict)
             assert config.schema_version == "1.0"
             assert len(config.entities) >= 1
