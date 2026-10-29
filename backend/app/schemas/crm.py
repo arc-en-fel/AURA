@@ -92,8 +92,8 @@ class CRMField(StrictModel):
     def validate_select_options(self) -> "CRMField":
         if self.type == "select" and not self.options:
             raise ValueError("Select fields require at least one option.")
-        if self.type != "select" and self.options is not None:
-            raise ValueError("Only select fields may define options.")
+        if self.type not in ("select", "status") and self.options is not None:
+            raise ValueError("Only select and status fields may define options.")
         return self
 
 

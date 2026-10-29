@@ -3,12 +3,20 @@
 Test that analytics work for any CRM type without hard-coded assumptions.
 Verify that stage names and field names match the CRM configuration.
 """
+import json
 import pytest
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
 from app.routers.workflows import get_analytics
 from app.schemas.crm import CRMConfiguration, CRMEntity, CRMField
+
+
+def _extract_response_data(response):
+    """Extract data from a JSONResponse object."""
+    if hasattr(response, 'body'):
+        return json.loads(response.body)['data']
+    return response.json()['data']
 
 
 def _create_test_crm_config(
@@ -139,20 +147,21 @@ async def test_analytics_e_commerce_crm():
                     user_id=UUID("00000000-0000-0000-0000-000000000099"),
                 )
 
+                data = _extract_response_data(response)
+
                 # Should use generic schema, not sales-specific
-                assert response.data["total_records"] == 3
-                assert "by_stage" in response.data
-                assert "by_source" in response.data
+                assert data["total_records"] == 3
+                assert "by_stage" in data
+                assert "by_source" in data
 
                 # Verify stages match config
-                stage_values = [s["value"] for s in response.data["by_stage"]]
+                stage_values = [s["value"] for s in data["by_stage"]]
                 assert "VIP Member" in stage_values
                 assert "Churn Risk" in stage_values
                 assert "First Order" in stage_values
 
-                # Should NOT have sales-specific fields
-                assert "total_leads" not in response.data or response.data.get("total_leads") == 3
-                assert "won_leads" not in response.data or response.data.get("won_leads") is not None
+                # Should NOT have sales-specific fields (they should be removed in C5 fix)
+                assert "total_leads" not in data or data.get("total_leads") == 3
 
 
 @pytest.mark.asyncio
@@ -212,12 +221,14 @@ async def test_analytics_healthcare_crm():
             user_id=UUID("00000000-0000-0000-0000-000000000099"),
         )
 
+        data = _extract_response_data(response)
+
         # Should use primary entity name from config
-        assert response.data["schema_info"]["primary_entity_name"] == "patient"
-        assert response.data["total_records"] == 2
+        assert data["schema_info"]["primary_entity_name"] == "patient"
+        assert data["total_records"] == 2
 
         # Verify stages match healthcare pipeline
-        stage_values = [s["value"] for s in response.data["by_stage"]]
+        stage_values = [s["value"] for s in data["by_stage"]]
         assert "Intake" in stage_values
         assert "Discharged" in stage_values
         assert "Treatment" in stage_values
@@ -285,15 +296,17 @@ async def test_analytics_recruitment_crm():
             user_id=UUID("00000000-0000-0000-0000-000000000099"),
         )
 
+        data = _extract_response_data(response)
+
         # Verify schema matches recruitment
-        assert response.data["schema_info"]["primary_entity_name"] == "candidate"
-        assert response.data["total_records"] == 3
+        assert data["schema_info"]["primary_entity_name"] == "candidate"
+        assert data["total_records"] == 3
 
         # Verify pipeline stages from config
-        assert set(response.data["schema_info"]["pipeline_stages"]) == set(config.pipeline_stages)
+        assert set(data["schema_info"]["pipeline_stages"]) == set(config.pipeline_stages)
 
         # All stages should appear in by_stage
-        stage_names = [s["value"] for s in response.data["by_stage"]]
+        stage_names = [s["value"] for s in data["by_stage"]]
         for stage in config.pipeline_stages:
             assert stage in stage_names
 
@@ -336,13 +349,15 @@ async def test_analytics_custom_crm_any_entity_name():
             user_id=UUID("00000000-0000-0000-0000-000000000099"),
         )
 
+        data = _extract_response_data(response)
+
         # Verify system adapts to custom entity name
-        assert response.data["schema_info"]["primary_entity_name"] == "task"
-        assert response.data["schema_info"]["primary_entity_name"] != "lead"
-        assert response.data["total_records"] == 4
+        assert data["schema_info"]["primary_entity_name"] == "task"
+        assert data["schema_info"]["primary_entity_name"] != "lead"
+        assert data["total_records"] == 4
 
         # Stage distribution must match config
-        stage_counts = {s["value"]: s["count"] for s in response.data["by_stage"]}
+        stage_counts = {s["value"]: s["count"] for s in data["by_stage"]}
         assert stage_counts["Done"] == 1
         assert stage_counts["In Progress"] == 1
         assert stage_counts["Review"] == 1

@@ -300,17 +300,6 @@ async def get_analytics(crm_id: UUID, user_id: CurrentUser):
                 "format": "number",
             })
 
-        # Backward compatibility for legacy tests
-        won_count = 0
-        qualified_count = 0
-        for s in by_stage:
-            val_lower = str(s.get("value", "")).lower()
-            if "won" in val_lower or "closed" in val_lower or "hired" in val_lower or "completed" in val_lower:
-                won_count += s.get("count", 0)
-            if "qualif" in val_lower or "interview" in val_lower or "screening" in val_lower:
-                qualified_count += s.get("count", 0)
-        conversion_rate = round(won_count / total_records, 4) if total_records > 0 else 0.0
-
         return success_response({
             "total_records": total_records,
             "entity_name": entity_name,
@@ -328,11 +317,6 @@ async def get_analytics(crm_id: UUID, user_id: CurrentUser):
                 "categorical_fields": [{"name": f.name, "label": f.label} for f in select_fields],
                 "numeric_fields": [{"name": f.name, "label": f.label, "type": f.type} for f in numeric_fields],
             },
-            # Backward compatibility fields
-            "total_leads": total_records,
-            "qualified_leads": qualified_count,
-            "won_leads": won_count,
-            "conversion_rate": conversion_rate,
         })
     except Exception as exc:
         logger.exception("Error computing analytics")
