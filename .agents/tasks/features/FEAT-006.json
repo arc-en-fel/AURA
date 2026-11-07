@@ -1,0 +1,41 @@
+{
+  "id": "FEAT-006",
+  "type": "test",
+  "description": "Comprehensive end-to-end and integration testing of the complete CRM generator fix and post-generation editing system. This feature covers all phases (field preservation, backend API, frontend editor, AI tools) with realistic workflows. Test both happy paths and edge cases. Verify no regressions in existing functionality.",
+  "status": "pending",
+  "steps": [
+    "Create backend/tests/test_e2e_crm_generation_and_editing.py with end-to-end test scenarios: (1) Generate CRM with 5 fields → verify all 5 in schema; (2) Add field via API → verify count increments; (3) Delete field with records → verify 409 warning; (4) Reorder fields → verify order preserved; (5) Update field type (safe conversion) → verify type changed; (6) Attempt unsafe type conversion → verify 409; (7) Add/delete/reorder stages → verify all operations work.",
+    "Add cross-tenant isolation tests: Verify User A cannot read/edit User B's CRM configuration. Test all field and stage endpoints with wrong user_id.",
+    "Add edge case tests: (1) Field with special characters in label → normalized to valid key; (2) Duplicate field names → rejected; (3) Field name collision with reserved system names → rejected; (4) Select field without options → rejected; (5) Reorder with missing or duplicate field names → rejected; (6) Delete non-existent field → 404; (7) Update non-existent field → 404.",
+    "Add record safety tests: (1) Add field to entity with existing records → new records support new field; (2) Delete field with existing records → 409 warning, no delete; (3) Change field type (safe) with existing records → type changed in schema; (4) Rename field recommendation (delete + add workflow).",
+    "Create frontend/src/__tests__/e2e/crm-editing.spec.tsx with frontend integration tests (if test infrastructure exists): (1) Generate CRM → display in UI; (2) Click [Edit CRM] → editor opens; (3) Add field → field appears in list; (4) Save changes → API called, success message; (5) Cancel → modal closes, changes discarded; (6) Error from API → error shown, retry possible.",
+    "Add performance tests (backend): Test large CRM configurations (50+ fields, 30+ stages) to ensure edit operations complete in < 1 second.",
+    "Add backward compatibility tests: Verify existing CRM configurations (created before schema editing) can be edited without issues. Test with various schema versions.",
+    "Add full regression test suite: Run all existing CRM generation tests to ensure no broken functionality. Run all existing record CRUD tests to ensure schema changes don't affect record operations.",
+    "Create test utilities in backend/tests/conftest.py: Helper functions to generate test CRMs with arbitrary field counts, create sample records, authenticate as different users.",
+    "Add test documentation in backend/tests/README.md or similar: Explain test structure, how to run specific test suites, how to add new tests. Include examples of testing authorization, record safety, schema operations."
+  ],
+  "acceptance_criteria": [
+    "All 8+ end-to-end scenarios pass (generation, add/edit/delete/reorder fields/stages)",
+    "Cross-tenant isolation: User A cannot modify User B's CRM on any endpoint",
+    "All edge cases handled correctly (invalid input, missing resources, duplicates, reserved names)",
+    "Record safety verified: field deletion checks for records, type changes with existing records work",
+    "Frontend editor integration (if applicable): component accepts input, calls API, displays success/error",
+    "Large CRM configurations (50+ fields) edit in < 1 second",
+    "Backward compatibility: old CRM configs can be edited without migration",
+    "All existing tests still pass (no regressions)",
+    "Test coverage > 90% for new schema editing code paths",
+    "Test documentation is clear and runnable"
+  ],
+  "verification": [
+    "Run: cd backend && python -m pytest backend/tests/test_e2e_crm_generation_and_editing.py -v (all pass)",
+    "Run: cd backend && python -m pytest backend/tests/ -k 'authorization' -v (verify tenant isolation)",
+    "Run: cd backend && python -m pytest backend/tests/ -k 'record' -v (verify record safety)",
+    "Run: cd backend && python -m pytest backend/tests/ --tb=short (all tests pass, no regressions)",
+    "Run: cd backend && python -m pytest backend/tests/ --cov=app.routers --cov=app.services (verify >90% coverage)",
+    "Run: cd frontend && npm test (if frontend tests exist, all pass)",
+    "Manual end-to-end flow: Generate CRM → Save → Edit [+ Add Field] → Save → Edit [Reorder] → Save → Verify all changes persisted"
+  ],
+  "blocked_reason": null,
+  "findings": "FEAT-001 through FEAT-004 must complete before comprehensive testing begins. However, test structure can be designed in parallel. The codebase already has pytest fixtures and test patterns in backend/tests/; these should be extended. Frontend test infrastructure may be minimal; scope frontend tests to what's feasible given project setup."
+}

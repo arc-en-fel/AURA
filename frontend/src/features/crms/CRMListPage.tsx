@@ -38,10 +38,10 @@ export const CRMListPage: React.FC = () => {
 
         <Button
           variant="primary"
-          onClick={() => navigate('/create-crm')}
+          onClick={() => navigate('/chat-crm')}
           leftIcon={<Sparkles className="w-4 h-4 text-aura-cyan" />}
         >
-          Generate New CRM
+          Build New CRM
         </Button>
       </div>
 
@@ -78,7 +78,7 @@ export const CRMListPage: React.FC = () => {
               : 'Generate your first CRM architecture using natural-language AI prompts.'
           }
           actionLabel="Generate CRM"
-          onAction={() => navigate('/create-crm')}
+          onAction={() => navigate('/chat-crm')}
         />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
@@ -97,7 +97,15 @@ export const CRMListPage: React.FC = () => {
                     <h3 className="font-bold text-base text-aura-navy truncate">
                       {crm.name}
                     </h3>
-                    <Badge variant={crm.status}>{crm.status}</Badge>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {isActive ? (
+                        <Badge variant="cyan" size="sm">Selected Workspace</Badge>
+                      ) : (
+                        <Badge variant={crm.status === 'active' ? 'neutral' : 'archived'} size="sm">
+                          {crm.status === 'active' ? 'Available' : 'Archived'}
+                        </Badge>
+                      )}
+                    </div>
                   </div>
 
                   <div className="flex items-center gap-2 mb-4">
@@ -148,7 +156,7 @@ export const CRMListPage: React.FC = () => {
                     onClick={() => selectCRM(crm.crm_id)}
                     leftIcon={isActive ? <CheckCircle className="w-3.5 h-3.5" /> : undefined}
                   >
-                    {isActive ? 'Active CRM' : 'Set as Active'}
+                    {isActive ? 'Current Workspace' : 'Select Workspace'}
                   </Button>
 
                   <Button

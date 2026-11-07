@@ -1,0 +1,43 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "severity": "HIGH",
+      "title": "Root cause not fully emphasized in design — SchemaPreservation integration is critical fix",
+      "description": "Design states SchemaPreservation 'exists' and 'no changes needed', but investigation shows the router does NOT call it. The critical fix is integrating SchemaPreservation.validate_and_repair_schema() into POST /api/v1/crm/generate. Design must emphasize this as the primary integration point for fixing field loss.",
+      "location": "Section 2.2, overall architecture flow"
+    },
+    {
+      "severity": "HIGH",
+      "title": "Post-generation editing endpoints incomplete — batch vs. individual field operations semantics unclear",
+      "description": "Design specifies individual PATCH endpoints for each field operation (add, update, delete, reorder) but does not clarify: (1) Should frontend batch multiple changes or call endpoints sequentially? (2) Is there a batch/apply endpoint for multiple operations in one transaction? (3) How does conflict detection work across multiple operations? Without clarity, implementation may choose incompatible approaches.",
+      "location": "Section 4.1, section 9.1, API contract updates"
+    },
+    {
+      "severity": "MEDIUM",
+      "title": "Field renaming not specified as unsupported in MVP",
+      "description": "Section 6.3 recommends disallowing field renaming if records exist, but this constraint is not reflected in the API contract (section 14.1 UpdateFieldRequest) or validation rules (section 4.3). This risks implementation building rename functionality that violates the MVP scope.",
+      "location": "Section 6.3, section 4.3, section 14.1"
+    },
+    {
+      "severity": "MEDIUM",
+      "title": "Field type conversion rules incomplete — not all type changes defined",
+      "description": "Section 6.4 lists some safe and unsafe conversions (text→email, select→number) but the list is incomplete. Ambiguities exist: What about textarea→text? boolean→select? No explicit validation matrix for backend logic to enforce these rules.",
+      "location": "Section 6.4, section 4.3"
+    },
+    {
+      "severity": "MEDIUM",
+      "title": "CRM lifecycle and editor entry point unclear — when does user edit, draft vs. saved?",
+      "description": "Design shows both [Edit Before Saving] (draft config) and [Edit CRM] (saved CRM) flows but doesn't clarify: (1) Is [Edit CRM] button visible for drafts? (2) What is the explicit two-step flow: generate→save or generate→edit→save? (3) How does the frontend distinguish draft from saved state? Ambiguity risks incorrect UI implementation.",
+      "location": "Section 9, section 5.2"
+    },
+    {
+      "severity": "MEDIUM",
+      "title": "Multi-provider support not addressed — field preservation prompt must be added to all providers",
+      "description": "Design specifies updating Ollama's system prompt only, but AGENTS.md and the codebase support Ollama, Grok, and Hugging Face. Field preservation fix must be applied to ALL providers' prompts, or field loss will silently fail for non-Ollama users.",
+      "location": "Section 3.1, section 3.2"
+    }
+  ],
+  "reviewDoc": "d:\\AURA - Copy\\.agents\\tasks\\design-review.md",
+  "timestamp": "2025-01-15T00:00:00Z"
+}

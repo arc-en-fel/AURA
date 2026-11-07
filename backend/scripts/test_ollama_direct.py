@@ -3,7 +3,7 @@ import httpx
 import time
 
 payload = {
-    "model": "qwen3:4b",
+    "model": "qwen2.5:3b",
     "prompt": (
         '<|im_start|>system\nYou are a JSON generator. Output only valid JSON.<|im_end|>\n'
         '<|im_start|>user\nGenerate this exact JSON: {"name": "Test CRM", "industry": "saas"}<|im_end|>\n'

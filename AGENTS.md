@@ -19,6 +19,24 @@ Read `docs/API_CONTRACTS.md`, `docs/CRM_SCHEMA.json`, and the relevant task file
 - Enforce authentication and CRM ownership on every scoped operation.
 - Never expose privileged Supabase credentials in the frontend.
 
+## Post-generation schema editing
+
+Every CRM is editable after generation via a universal schema editor. Field and stage modifications work for any CRM type (Sales, Service, Recruitment, etc.). All operations are documented in `docs/API_CONTRACTS.md` section 5.17 and `docs/SCHEMA_EDITING.md`.
+
+**Key endpoints:**
+- `POST /api/v1/crm/{crm_id}/fields` — Add field
+- `PATCH /api/v1/crm/{crm_id}/fields/{field_name}` — Update field properties
+- `DELETE /api/v1/crm/{crm_id}/fields/{field_name}` — Delete field
+- `PATCH /api/v1/crm/{crm_id}/fields/reorder` — Reorder fields
+- `POST /api/v1/crm/{crm_id}/stages` — Add pipeline stage
+- `PATCH /api/v1/crm/{crm_id}/stages/{stage_name}` — Rename stage
+- `DELETE /api/v1/crm/{crm_id}/stages/{stage_name}` — Delete stage
+- `PATCH /api/v1/crm/{crm_id}/stages/reorder` — Reorder stages
+
+**Type conversion rules:** Changing a field type is only allowed for safe conversions (e.g., text → email). Unsafe conversions (select → number) return 409 CONFLICT; use delete + add workflow instead. See `docs/API_CONTRACTS.md` section 1.8 for the full type conversion matrix.
+
+**Record safety:** Adding fields is safe. Deleting fields with existing records requires explicit confirmation (`?confirm=true`). Changing required state or type only affects new records, not existing ones.
+
 ## Collaboration
 - Implement only the assigned module.
 - Do not change shared API contracts or schemas without team approval.
@@ -42,3 +60,4 @@ Read `docs/API_CONTRACTS.md`, `docs/CRM_SCHEMA.json`, and the relevant task file
 - Keep generated OpenAPI documentation aligned with the API contract.
 - Use lowercase machine identifiers for entity names in API paths (e.g., `/records/lead`, not `/records/Lead`).
 - Distinguish CRM generation (draft), CRM saving (persistence), and CRM activation (operational use).
+

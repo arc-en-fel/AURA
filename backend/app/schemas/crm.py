@@ -51,7 +51,7 @@ class GenerateCRMRequest(StrictModel):
 
 
 FieldType = Literal[
-    "text", "textarea", "email", "number", "date", "boolean", "select", "phone"
+    "text", "textarea", "email", "number", "currency", "date", "datetime", "boolean", "select", "phone", "url", "status"
 ]
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 RESERVED_FIELDS = {
@@ -92,8 +92,8 @@ class CRMField(StrictModel):
     def validate_select_options(self) -> "CRMField":
         if self.type == "select" and not self.options:
             raise ValueError("Select fields require at least one option.")
-        if self.type != "select" and self.options is not None:
-            raise ValueError("Only select fields may define options.")
+        if self.type not in ("select", "status") and self.options is not None:
+            raise ValueError("Only select and status fields may define options.")
         return self
 
 
@@ -117,12 +117,30 @@ class CRMEntity(StrictModel):
         return self
 
 
+class UIConfig(BaseModel):
+    """Optional UI configuration for persisting visual metadata.
+
+    Uses permissive BaseModel (not StrictModel) so that new keys
+    can be added without breaking existing CRM configurations.
+    """
+    model_config = ConfigDict(extra="allow")
+
+    stage_colors: dict[str, str] = Field(
+        default_factory=dict,
+        description="Mapping of pipeline stage name to palette color key.",
+    )
+
+
 class CRMConfiguration(StrictModel):
     schema_version: Literal["1.0"] = "1.0"
     name: str = Field(min_length=1, max_length=120)
     industry: str = Field(min_length=1, max_length=80)
     entities: list[CRMEntity] = Field(min_length=1, max_length=30)
     pipeline_stages: list[str] = Field(default_factory=list, max_length=30)
+    ui_config: UIConfig | None = Field(
+        default=None,
+        description="Optional UI presentation metadata. Not required for operation.",
+    )
 
     @model_validator(mode="after")
     def unique_entities(self) -> "CRMConfiguration":
@@ -246,12 +264,17 @@ class WorkflowData(StrictModel):
 
 
 class AnalyticsData(StrictModel):
-    total_leads: int = Field(ge=0)
-    qualified_leads: int = Field(ge=0)
-    won_leads: int = Field(ge=0)
-    conversion_rate: float = Field(ge=0, le=1)
-    by_source: list[dict[str, Any]] = Field(default_factory=list)
-    by_stage: list[dict[str, Any]] = Field(default_factory=list)
+    """Universal analytics schema supporting any CRM type.
+    
+    total_records: total records in CRM
+    records_by_stage: distribution across pipeline stages (if applicable)
+    records_by_field: categorical metrics for select/status fields
+    custom_metrics: optional numeric aggregations (sum, avg, min, max) for numeric fields
+    """
+    total_records: int = Field(ge=0)
+    records_by_stage: list[dict[str, Any]] = Field(default_factory=list)
+    records_by_field: list[dict[str, Any]] = Field(default_factory=list)
+    custom_metrics: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class EvolutionObjectiveRequest(StrictModel):
@@ -311,3 +334,55 @@ class ApproveProposalRequest(StrictModel):
 
 class RejectProposalRequest(StrictModel):
     reason: str = Field(min_length=3, max_length=1000)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST-GENERATION CRM EDITING SCHEMAS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AddFieldRequest(StrictModel):
+    """Request to add a new field to a CRM entity."""
+    field_name: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=100)
+    field_type: FieldType = Field(default="text")
+    required: bool = False
+    options: list[str] | None = None
+
+
+class UpdateFieldRequest(StrictModel):
+    """Request to update field properties."""
+    label: str | None = None
+    field_type: FieldType | None = None
+    required: bool | None = None
+    options: list[str] | None = None
+
+
+class DeleteFieldRequest(StrictModel):
+    """Request to delete a field (may include confirmation flag)."""
+    confirm: bool = False
+
+
+class ReorderFieldsRequest(StrictModel):
+    """Request to reorder fields in an entity."""
+    field_order: list[str] = Field(min_length=1)
+
+
+class AddStageRequest(StrictModel):
+    """Request to add a new pipeline stage."""
+    stage_name: str = Field(min_length=1, max_length=100)
+    position: int | None = Field(default=None, ge=0)
+
+
+class UpdateStageRequest(StrictModel):
+    """Request to rename a pipeline stage."""
+    new_stage_name: str = Field(min_length=1, max_length=100)
+
+
+class DeleteStageRequest(StrictModel):
+    """Request to delete a pipeline stage."""
+    confirm: bool = False
+
+
+class ReorderStagesRequest(StrictModel):
+    """Request to reorder pipeline stages."""
+    stage_order: list[str] = Field(min_length=1)

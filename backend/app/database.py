@@ -98,14 +98,56 @@ class CRMRepository:
 
     def update_crm(self, crm_id: str, owner_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
         """Update CRM metadata. Enforces ownership and active status."""
+        safe_updates = {k: v for k, v in updates.items() if not (k == "configuration_version" and v is None)}
         result = (
             self._client.table("crms")
-            .update(updates)
+            .update(safe_updates)
             .eq("id", crm_id)
             .eq("owner_id", owner_id)
             .eq("status", "active")
             .execute()
         )
+        return result.data[0] if result.data else None
+
+    def update_crm_configuration(
+        self,
+        crm_id: str,
+        owner_id: str,
+        configuration: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """
+        Update CRM configuration and increment version.
+        
+        This method:
+        1. Validates the new configuration with Pydantic
+        2. Updates the configuration in the database
+        3. Increments the configuration_version for change tracking
+        4. Enforces ownership and active status
+        """
+        from app.schemas.crm import CRMConfiguration
+        
+        # Validate configuration
+        CRMConfiguration(**configuration)
+        
+        crm = self.get_crm(crm_id, owner_id)
+        if not crm:
+            return None
+        current_version = crm.get("configuration_version") or 1
+        new_version = current_version + 1
+        
+        # Update configuration and version atomically
+        result = (
+            self._client.table("crms")
+            .update({
+                "configuration": configuration,
+                "configuration_version": new_version,
+            })
+            .eq("id", crm_id)
+            .eq("owner_id", owner_id)
+            .eq("status", "active")
+            .execute()
+        )
+        
         return result.data[0] if result.data else None
 
     # ── RECORDS CRUD ────────────────────────────────────────────────
@@ -183,6 +225,44 @@ class CRMRepository:
             .execute()
         )
         return result.data or [], total
+
+    def count_records(self, crm_id: str, entity_name: str | None = None) -> int:
+        """Count non-deleted records for a CRM entity (or all entities in CRM if None)."""
+        query = (
+            self._client.table("records")
+            .select("id", count="exact")
+            .eq("crm_id", crm_id)
+            .is_("deleted_at", "null")
+        )
+        if entity_name:
+            query = query.eq("entity_name", entity_name)
+        result = query.execute()
+        return result.count or 0
+
+    def get_all_records(self, crm_id: str, entity_name: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+        """Get non-deleted records for analytics aggregation."""
+        query = (
+            self._client.table("records")
+            .select("*")
+            .eq("crm_id", crm_id)
+            .is_("deleted_at", "null")
+            .order("created_at", desc=True)
+            .limit(limit)
+        )
+        if entity_name:
+            query = query.eq("entity_name", entity_name)
+        result = query.execute()
+        return result.data or []
+
+    def count_records_by_field(self, crm_id: str, entity_name: str, field_name: str) -> list[dict[str, Any]]:
+        """Count non-deleted records grouped by a JSON data field value."""
+        records = self.get_all_records(crm_id, entity_name)
+        counts: dict[str, int] = {}
+        for r in records:
+            data = r.get("data", {})
+            val = str(data.get(field_name, "Unassigned"))
+            counts[val] = counts.get(val, 0) + 1
+        return [{"value": k, "count": v} for k, v in counts.items()]
 
     def get_record(self, record_id: str, crm_id: str, entity_name: str) -> dict[str, Any] | None:
         """Get a single non-deleted record."""

@@ -1,0 +1,38 @@
+{
+  "id": "FEAT-004",
+  "type": "feat",
+  "description": "Add AI tooling support so AURA Copilot can programmatically modify CRM schemas. Define tool schemas that Qwen/other LLMs can call to add/update/delete fields and stages. This enables the AI to propose schema evolution (e.g., 'I notice you need an Escalation field; adding it now'). All tool calls are validated server-side before execution.",
+  "status": "pending",
+  "steps": [
+    "Define AI tool schemas in backend/app/services/ai_tools.py: Create CRMSchemaTools class with static methods: add_crm_field(), update_crm_field(), delete_crm_field(), add_crm_stage(), update_crm_stage(), delete_crm_stage(). Each method maps to the corresponding backend endpoint from FEAT-002.",
+    "Create tool definitions in OpenAI function-calling format in backend/app/services/ai_tools.py: Define COPILOT_TOOLS list with JSON schemas for each tool. Include descriptions, parameters (with types, min/max, enums), and required fields. Ensure schemas match the request/response contracts from FEAT-002.",
+    "Create tool execution endpoint in backend/app/routers/copilot.py (or appropriate file): POST /api/v1/copilot/tool-call or similar. Accepts tool_call payload with tool_name and parameters. Validates authenticated user, maps tool_name to CRMSchemaTools method, executes with user context, returns result or error.",
+    "Add authorization checks in tool execution: Every tool call must verify user owns the CRM being modified. Use the same authorization pattern as FEAT-002 endpoints.",
+    "Add input validation in tool execution: Validate parameters with Pydantic before passing to CRMSchemaTools. Reject invalid tool names, missing required parameters, out-of-range values.",
+    "Implement tool result formatting: Copilot tools return success/error responses compatible with OpenAI function-calling format. Success includes updated CRMConfiguration. Error includes error code and message.",
+    "Add tests in backend/tests/test_copilot_tools.py: test_add_field_via_tool(), test_update_field_via_tool(), test_unauthorized_user_cannot_call_tool(), test_invalid_parameters_rejected(), test_tool_result_format_valid()",
+    "Update copilot system prompt in backend/app/services/ollama_provider.py to include COPILOT_TOOLS in available functions. Ensure prompt instructs Qwen to call tools only when the user asks for schema modifications.",
+    "Document tool schemas in docs/API_CONTRACTS.md: Add section describing available Copilot tools, their parameters, and expected responses"
+  ],
+  "acceptance_criteria": [
+    "CRMSchemaTools class exists with 6 static methods (add_field, update_field, delete_field, add_stage, update_stage, delete_stage)",
+    "COPILOT_TOOLS list contains valid OpenAI function-calling tool schemas",
+    "POST /api/v1/copilot/tool-call endpoint accepts and executes tool calls",
+    "All tool calls verify user owns the CRM (403 if unauthorized)",
+    "Invalid parameters rejected with 400 or 422 error",
+    "Successful tool execution returns updated CRMConfiguration",
+    "Tool calls increment configuration_version (via backend endpoints)",
+    "All 5 copilot tool tests pass",
+    "Copilot system prompt includes tool definitions",
+    "Qwen can be instructed to call tools to modify schema"
+  ],
+  "verification": [
+    "Run: cd backend && python -m pytest backend/tests/test_copilot_tools.py -v (verify tool tests pass)",
+    "Manual test: Call POST /api/v1/copilot/tool-call with add_field tool → field added to CRM",
+    "Manual test: Call tool without CRM ownership → 403 Forbidden",
+    "Manual test: Call tool with invalid parameters → 400 or 422 with error message",
+    "Manual test: Prompt Copilot with 'Add an Escalation field to my CRM' → Copilot calls add_crm_field tool, field appears in CRM"
+  ],
+  "blocked_reason": null,
+  "findings": "FEAT-002 must complete first (backend endpoints that tools will call). The CRMSchemaTools methods will mostly delegate to the PATCH/POST/DELETE endpoints from FEAT-002, so this feature is lightweight once FEAT-002 is done. The main work is mapping tools to OpenAI function-calling format and updating the Copilot system prompt."
+}

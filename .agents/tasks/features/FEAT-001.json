@@ -1,0 +1,31 @@
+{
+  "id": "FEAT-001",
+  "type": "fix",
+  "description": "Fix root cause of field loss: integrate SchemaPreservation and FieldExtractor into the POST /api/v1/crm/generate endpoint. Currently the endpoint only calls provider.generate_crm_config() without validating or repairing fields. This FEAT adds the critical validation layer that ensures all user-requested fields survive generation. Also enhance LLM prompts across all providers to instruct the model to preserve all requested fields.",
+  "status": "pending",
+  "steps": [
+    "Enhance system prompt in backend/app/services/ollama_provider.py: Add FIELD PRESERVATION REQUIREMENT section to _get_system_prompt() that explicitly instructs the LLM to include every user-requested field in the generated schema",
+    "Add the same FIELD PRESERVATION REQUIREMENT section to any other LLM provider system prompts (check for backend/app/services/grok_provider.py, huggingface_provider.py, etc.) so all providers enforce field preservation",
+    "Complete the POST /api/v1/crm/generate endpoint in backend/app/routers/crm.py: After provider.generate_crm_config() call, integrate SchemaPreservation.validate_and_repair_schema() to extract, validate, and repair any missing fields",
+    "Add field_analysis metadata to the response: Include comparison of extracted_count vs generated_count so frontend can warn user if any fields were lost (even after repair)",
+    "Add comprehensive tests in backend/tests/test_custom_crm_bug_fix.py or new file testing: 5 fields requested → 5 fields in schema, 10 fields → 10 fields, 15 fields → 15 fields, verify no silent field drops"
+  ],
+  "acceptance_criteria": [
+    "POST /api/v1/crm/generate endpoint calls SchemaPreservation.validate_and_repair_schema()",
+    "All LLM provider system prompts include explicit FIELD PRESERVATION REQUIREMENT section",
+    "Response includes field_analysis dict with generated_count, extracted_count, ok (boolean), reason",
+    "Test: user request with 5 fields → schema has exactly 5 fields",
+    "Test: user request with 10 fields → schema has exactly 10 fields",
+    "Test: user request with 15 fields → schema has exactly 15 fields",
+    "No schema ever has fewer fields than user explicitly requested",
+    "All existing CRM generation tests still pass (no regression)"
+  ],
+  "verification": [
+    "Run: cd backend && python -m pytest backend/tests/test_custom_crm_bug_fix.py -v (verify field count tests pass)",
+    "Run: cd backend && python -m pytest backend/tests/test_universal_crm_generation.py -v (verify no regressions in existing generation tests)",
+    "Manual test: Generate a SalesCRM with 5 fields listed, verify generated config has all 5",
+    "Manual test: Generate a ServiceCRM with 10 fields listed, verify generated config has all 10"
+  ],
+  "blocked_reason": null,
+  "findings": "FieldExtractor and SchemaPreservation services exist and are correct. The endpoint at line 36-50 in backend/app/routers/crm.py currently only calls provider.generate_crm_config() without calling SchemaPreservation. This is the root cause of field loss. The fix is straightforward: integrate SchemaPreservation into the endpoint after provider returns. All LLM provider system prompts must also be updated to explicitly instruct the model to preserve fields."
+}

@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from '@/context/AuthContext';
 import { CRMProvider } from '@/context/CRMContext';
+import { ChatProvider } from '@/context/ChatContext';
 import { ToastProvider } from '@/context/ToastContext';
 import { ProtectedRoute } from '@/features/auth/ProtectedRoute';
 import { LoginPage } from '@/features/auth/LoginPage';
@@ -12,7 +13,6 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { DashboardPage } from '@/features/dashboard/DashboardPage';
 import { CRMListPage } from '@/features/crms/CRMListPage';
 import { CRMDetailPage } from '@/features/crms/CRMDetailPage';
-import { CRMGeneratorPage } from '@/features/crm-generator/CRMGeneratorPage';
 import { CRMChatPage } from '@/features/crm-chat/CRMChatPage';
 import { RecordsPage } from '@/features/records/RecordsPage';
 import { WorkflowsPage } from '@/features/workflows/WorkflowsPage';
@@ -25,35 +25,40 @@ export const App: React.FC = () => {
     <BrowserRouter>
       <AuthProvider>
         <CRMProvider>
-          <ToastProvider>
-            <Routes>
-              {/* Public Authentication Routes */}
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/register" element={<RegisterPage />} />
-              <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-              <Route path="/auth/callback" element={<AuthCallbackPage />} />
+          {/* ChatProvider sits inside AuthProvider so it can scope state by user.
+              It wraps all protected routes so chat state survives navigation. */}
+          <ChatProvider>
+            <ToastProvider>
+              <Routes>
+                {/* Public Authentication Routes */}
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/register" element={<RegisterPage />} />
+                <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+                <Route path="/auth/callback" element={<AuthCallbackPage />} />
 
-              {/* Protected Workspace Routes */}
-              <Route element={<ProtectedRoute />}>
-                <Route element={<AppLayout />}>
-                  <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                  <Route path="/dashboard" element={<DashboardPage />} />
-                  <Route path="/crms" element={<CRMListPage />} />
-                  <Route path="/crms/:crmId" element={<CRMDetailPage />} />
-                  <Route path="/create-crm" element={<CRMGeneratorPage />} />
-                  <Route path="/chat-crm" element={<CRMChatPage />} />
-                  <Route path="/records" element={<RecordsPage />} />
-                  <Route path="/workflows" element={<WorkflowsPage />} />
-                  <Route path="/analytics" element={<AnalyticsPage />} />
-                  <Route path="/evolution" element={<EvolutionPage />} />
-                  <Route path="/settings" element={<SettingsPage />} />
+                {/* Protected Workspace Routes */}
+                <Route element={<ProtectedRoute />}>
+                  <Route element={<AppLayout />}>
+                    <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                    <Route path="/dashboard" element={<DashboardPage />} />
+                    <Route path="/crms" element={<CRMListPage />} />
+                    <Route path="/crms/:crmId" element={<CRMDetailPage />} />
+                    {/* /create-crm redirects to the unified chat-based builder */}
+                    <Route path="/create-crm" element={<Navigate to="/chat-crm" replace />} />
+                    <Route path="/chat-crm" element={<CRMChatPage />} />
+                    <Route path="/records" element={<RecordsPage />} />
+                    <Route path="/workflows" element={<WorkflowsPage />} />
+                    <Route path="/analytics" element={<AnalyticsPage />} />
+                    <Route path="/evolution" element={<EvolutionPage />} />
+                    <Route path="/settings" element={<SettingsPage />} />
+                  </Route>
                 </Route>
-              </Route>
 
-              {/* Catch-all redirect */}
-              <Route path="*" element={<Navigate to="/dashboard" replace />} />
-            </Routes>
-          </ToastProvider>
+                {/* Catch-all redirect */}
+                <Route path="*" element={<Navigate to="/dashboard" replace />} />
+              </Routes>
+            </ToastProvider>
+          </ChatProvider>
         </CRMProvider>
       </AuthProvider>
     </BrowserRouter>

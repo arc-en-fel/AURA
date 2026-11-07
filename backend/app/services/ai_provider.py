@@ -11,6 +11,7 @@ in the prompt. It is NOT a real LLM and is clearly labeled as such.
 from __future__ import annotations
 
 import json
+import re
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -41,93 +42,119 @@ class MockAIProvider(AIProvider):
     """
 
     def generate_crm_config(self, prompt: str) -> dict[str, Any]:
-        """Generate a mock CRM configuration from prompt keywords."""
+        """Generate a universal CRM configuration dynamically from prompt keywords, entities, and fields."""
+        from app.services.field_extractor import FieldExtractor
         lower = prompt.lower()
 
-        # Detect industry from prompt
+        # Extract explicitly requested fields & stages
+        extracted_fields = FieldExtractor.extract_fields_from_prompt(prompt)
+        extracted_stages = FieldExtractor.extract_pipeline_stages(prompt)
+
+        # Detect industry
         industry = "general"
-        for ind in ["real_estate", "real estate", "saas", "ecommerce", "e-commerce",
-                     "healthcare", "education", "consulting", "restaurant", "fitness"]:
+        for ind in ["ecommerce", "e-commerce", "support", "customer_support", "recruitment", "hiring", "export",
+                    "real_estate", "real estate", "saas", "healthcare", "education", "consulting", "logistics"]:
             if ind.replace("_", " ") in lower or ind in lower:
                 industry = ind.replace(" ", "_").replace("-", "")
                 break
 
-        # Detect name hints
-        name = f"{industry.replace('_', ' ').title()} CRM"
+        # Detect clean title
+        title_match = re.search(r"(?:build|create)\s+(?:a\s+|an\s+)?([A-Za-z0-9_\-\s]+?)\s+(?:crm|with|to)", prompt, re.IGNORECASE)
+        if title_match:
+            raw_title = title_match.group(1).strip()
+            name = f"{raw_title.title()} CRM" if not raw_title.lower().endswith("crm") else raw_title.title()
+        else:
+            name = f"{industry.replace('_', ' ').title()} CRM"
 
-        # Build entities based on detected keywords
-        entities = []
+        # Detect primary entity name and label from prompt
+        entity_name = "record"
+        entity_label = "Record"
+        known_entities = [
+            ("customer", "Customer"),
+            ("client", "Client"),
+            ("candidate", "Candidate"),
+            ("ticket", "Ticket"),
+            ("issue", "Issue"),
+            ("shipment", "Shipment"),
+            ("order", "Order"),
+            ("patient", "Patient"),
+            ("property", "Property"),
+            ("student", "Student"),
+            ("employee", "Employee"),
+            ("project", "Project"),
+            ("vendor", "Vendor"),
+            ("invoice", "Invoice"),
+            ("booking", "Booking"),
+            ("lead", "Lead"),
+        ]
+        for ent_key, ent_lbl in known_entities:
+            if re.search(rf"\b{ent_key}s?\b", lower):
+                entity_name = ent_key
+                entity_label = ent_lbl
+                break
 
-        # Always include a lead entity
-        lead_fields = [
-            {"name": "full_name", "label": "Full Name", "type": "text", "required": True},
-            {"name": "email", "label": "Email", "type": "email", "required": False},
-            {"name": "phone", "label": "Phone", "type": "phone", "required": False},
-            {"name": "company", "label": "Company", "type": "text", "required": False},
-            {
-                "name": "lead_source",
-                "label": "Lead Source",
-                "type": "select",
-                "required": True,
-                "options": ["Website", "Referral", "Social Media", "Cold Call", "Other"],
-            },
-            {
+        # Pipeline stages: use extracted stages, or appropriate defaults
+        if extracted_stages:
+            stages = extracted_stages
+        elif "ecommerce" in industry or "ecommerce" in lower:
+            stages = ["New", "Analyzing", "High Value", "At Risk", "Retained/Lost"]
+        elif "support" in industry or "ticket" in lower:
+            stages = ["Open", "Assigned", "In Progress", "Waiting", "Resolved", "Closed"]
+        elif "recruitment" in industry or "candidate" in lower:
+            stages = ["Applied", "Screening", "Interview", "Selected", "Hired", "Rejected"]
+        elif "export" in industry or "shipment" in lower:
+            stages = ["New Lead", "Contacted", "Quotation", "Order Confirmed", "Shipped", "Completed"]
+        else:
+            stages = ["New", "In Progress", "Completed"]
+
+        # Build fields
+        fields: list[dict[str, Any]] = []
+        if extracted_fields:
+            for ef in extracted_fields:
+                ftype = ef.inferred_type
+                fdict: dict[str, Any] = {
+                    "name": ef.machine_key,
+                    "label": ef.label,
+                    "type": ftype,
+                    "required": ef.required,
+                }
+                if ftype == "select":
+                    if any(w in ef.machine_key for w in ["status", "stage"]):
+                        fdict["options"] = list(stages)
+                    elif "priority" in ef.machine_key:
+                        fdict["options"] = ["Low", "Medium", "High", "Critical"]
+                    elif "source" in ef.machine_key:
+                        fdict["options"] = ["Website", "Referral", "Partner", "Direct"]
+                    elif "segment" in ef.machine_key:
+                        fdict["options"] = ["Standard", "Premium", "Enterprise"]
+                    else:
+                        fdict["options"] = ["Option 1", "Option 2", "Option 3"]
+                fields.append(fdict)
+        else:
+            # Fallback fields based on entity
+            fields = [
+                {"name": f"{entity_name}_name", "label": f"{entity_label} Name", "type": "text", "required": True},
+                {"name": "status", "label": f"{entity_label} Status", "type": "select", "required": True, "options": stages},
+            ]
+
+        # Ensure a status field exists and has the pipeline stages as options
+        has_status = any(f.get("name") in ("status", "stage", f"{entity_name}_status", "shipping_status") or f.get("type") in ("status", "select") and "status" in f.get("name", "") for f in fields)
+        if not has_status:
+            fields.append({
                 "name": "status",
                 "label": "Status",
                 "type": "select",
                 "required": True,
-                "options": ["New", "Contacted", "Qualified", "Proposal", "Won", "Lost"],
-            },
+                "options": stages,
+            })
+
+        entities = [
+            {
+                "name": entity_name,
+                "label": entity_label,
+                "fields": fields,
+            }
         ]
-        entities.append({"name": "lead", "label": "Lead", "fields": lead_fields})
-
-        # Add contact if mentioned
-        if "contact" in lower:
-            entities.append({
-                "name": "contact",
-                "label": "Contact",
-                "fields": [
-                    {"name": "full_name", "label": "Full Name", "type": "text", "required": True},
-                    {"name": "email", "label": "Email", "type": "email", "required": True},
-                    {"name": "phone", "label": "Phone", "type": "phone", "required": False},
-                    {"name": "organization", "label": "Organization", "type": "text", "required": False},
-                ],
-            })
-
-        # Add deal/opportunity if mentioned
-        if any(word in lower for word in ["deal", "opportunity", "sale"]):
-            entities.append({
-                "name": "deal",
-                "label": "Deal",
-                "fields": [
-                    {"name": "title", "label": "Deal Title", "type": "text", "required": True},
-                    {"name": "value", "label": "Value", "type": "number", "required": False},
-                    {"name": "close_date", "label": "Close Date", "type": "date", "required": False},
-                    {
-                        "name": "stage",
-                        "label": "Stage",
-                        "type": "select",
-                        "required": True,
-                        "options": ["Prospecting", "Negotiation", "Closed Won", "Closed Lost"],
-                    },
-                ],
-            })
-
-        # Add task if mentioned
-        if "task" in lower:
-            entities.append({
-                "name": "task",
-                "label": "Task",
-                "fields": [
-                    {"name": "title", "label": "Title", "type": "text", "required": True},
-                    {"name": "description", "label": "Description", "type": "textarea", "required": False},
-                    {"name": "due_date", "label": "Due Date", "type": "date", "required": False},
-                    {"name": "completed", "label": "Completed", "type": "boolean", "required": False},
-                ],
-            })
-
-        # Build pipeline stages from lead status options
-        stages = ["New", "Contacted", "Qualified", "Proposal", "Won", "Lost"]
 
         config = {
             "schema_version": "1.0",
@@ -193,11 +220,14 @@ class MockAIProvider(AIProvider):
             }
 
 
-def get_ai_provider(provider_name: str = "mock") -> AIProvider:
+def get_ai_provider(provider_name: str = "groq") -> AIProvider:
     """Factory function to get the configured AI provider."""
-    normalized = (provider_name or "mock").lower().strip()
+    normalized = (provider_name or "groq").lower().strip()
     if normalized == "mock":
         return MockAIProvider()
+    if normalized == "groq":
+        from app.services.groq_provider import GroqAIProvider
+        return GroqAIProvider()
     if normalized in ("local", "ollama"):
         from app.config import get_settings
         from app.services.laya_runtime import LayaDecisionEngine
@@ -206,8 +236,7 @@ def get_ai_provider(provider_name: str = "mock") -> AIProvider:
         settings = get_settings()
         return OllamaAIProvider(
             base_url=settings.local_llm_base_url,
-            model=settings.local_llm_model or "qwen3:4b",
-            enable_fallback=True,
+            model=settings.local_llm_model,
             decision_engine=LayaDecisionEngine(),
         )
-    raise ValueError(f"Unsupported AI provider: {provider_name}. Use 'mock' or 'local' for demos.")
+    raise ValueError(f"Unsupported AI provider: {provider_name}. Use 'groq', 'local', or explicit test-only 'mock'.")

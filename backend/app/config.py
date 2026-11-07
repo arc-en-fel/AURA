@@ -6,7 +6,7 @@ in frontend code, logs, or API responses.
 from __future__ import annotations
 
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator
 
 
 class Settings(BaseSettings):
@@ -27,13 +27,22 @@ class Settings(BaseSettings):
     )
 
     # AI/LLM provider
-    llm_provider: str = Field(default="mock", description="LLM provider: mock, local, grok")
-    grok_api_key: str = Field(default="", description="Grok API key")
-    grok_base_url: str = Field(default="", description="Grok API base URL")
+    llm_provider: str = Field(default="groq", description="LLM provider: groq, local, mock (tests only)")
+    groq_api_key: str = Field(default="", description="Groq API key (server-side only)")
+    groq_model: str = Field(default="llama-3.3-70b-versatile", description="Groq model")
+    grok_api_key: str = Field(default="", description="Deprecated Grok API key")
+    grok_base_url: str = Field(default="", description="Deprecated Grok API base URL")
     local_llm_base_url: str = Field(
         default="http://localhost:11434", description="Local LLM base URL"
     )
-    local_llm_model: str = Field(default="", description="Local LLM model name")
+    local_llm_model: str = Field(default="qwen2.5:3b", description="Local LLM model name")
+
+    @field_validator("local_llm_model", mode="before")
+    @classmethod
+    def default_local_llm_model(cls, value: object) -> str:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return "qwen2.5:3b"
+        return str(value).strip()
 
     # Application
     app_name: str = Field(default="Self-Evolving CRM", description="Application name")

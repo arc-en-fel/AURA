@@ -1,0 +1,346 @@
+{
+  "investigation_summary": {
+    "title": "AURA Copilot Tool-Calling Pipeline Root Cause Analysis",
+    "date": "2025-10-29",
+    "scope": "Hard-coded entity names, raw tool-call display, entity resolution failures",
+    "status": "Complete"
+  },
+  "root_causes": [
+    {
+      "id": "RC-001",
+      "title": "Silent Entity Fallback in _resolve_entity()",
+      "severity": "CRITICAL",
+      "file": "backend/app/services/ai_tools.py",
+      "lines": "40-55",
+      "description": "When LLM generates entity_name that doesn't match any CRM entity, _resolve_entity() silently returns entities[0] instead of None or raising an error",
+      "code_snippet": "# Line 54: return entities[0]  # Should return None",
+      "impact": "Records created in wrong entities; data goes to first entity regardless of user intent",
+      "example_scenario": "User: 'Add a lead' → CRM has only 'machine_identifier' entity → Record created in machine_identifier instead of suggesting clarification",
+      "fix_priority": "HIGHEST",
+      "required_changes": [
+        "Return None instead of entities[0] when no match found",
+        "Caller must handle None and ask user for clarification or list available entities"
+      ]
+    },
+    {
+      "id": "RC-002",
+      "title": "Hardcoded Example Entity Names in System Prompt",
+      "severity": "CRITICAL",
+      "file": "backend/app/routers/copilot.py",
+      "lines": "48-63",
+      "description": "System prompt contains hardcoded examples using 'lead', 'customer', 'contact' without reflecting actual CRM entities",
+      "code_snippet": "\"Examples:\\n- Create record: TOOL_CALL: {...entity_name: lead...}\\n- Update: ...entity_name: lead...\"",
+      "impact": "LLM learns these are valid entity names from examples; generates them even if they don't exist in the CRM",
+      "example_scenario": "CRM with only 'product' entity; LLM sees 'lead' examples and generates entity_name='lead' which doesn't exist",
+      "fix_priority": "HIGHEST",
+      "required_changes": [
+        "Replace hardcoded examples with examples using actual CRM entity names",
+        "Dynamically generate 'VALID ENTITY NAMES: ...' section from config",
+        "Add instruction: 'Always use entity names from the VALID ENTITY NAMES list above'"
+      ]
+    },
+    {
+      "id": "RC-003",
+      "title": "Missing Explicit Entity List in CRM Context",
+      "severity": "HIGH",
+      "file": "backend/app/routers/copilot.py",
+      "lines": "71-93",
+      "description": "ACTIVE CRM CONTEXT section includes entity fields but not a clear machine-identifier list for LLM to parse",
+      "code_snippet": "\"Entities:\\n\" + (\"\\n\".join(entity_summary) if entity_summary else \"  None\") + \"\\n\"",
+      "impact": "LLM must infer valid entity names from semi-structured text; lacks definitive list for tool-call generation",
+      "example_scenario": "LLM reads entity_summary but doesn't have explicit list like 'VALID ENTITIES: machine_identifier, product'",
+      "fix_priority": "HIGH",
+      "required_changes": [
+        "Add explicit section: 'VALID ENTITY NAMES: comma-separated-list'",
+        "Include entity labels in parentheses for clarity: 'machine_identifier (Machine ID), product (Product Item)'",
+        "Emphasize that LLM must only use names from this list"
+      ]
+    },
+    {
+      "id": "RC-004",
+      "title": "No Entity Validation Before Tool Execution",
+      "severity": "HIGH",
+      "file": "backend/app/routers/copilot.py",
+      "lines": "680-750",
+      "description": "execute_tool_call endpoint accepts entity_name without validating it exists in CRM configuration",
+      "code_snippet": "result = handler(crm_id=body.crm_id, owner_id=str(user_id), **body.arguments)  # No entity validation before handler call",
+      "impact": "Invalid entity names reach handler; handler's fallback (RC-001) silently uses wrong entity",
+      "example_scenario": "Frontend sends entity_name='lead' to execute_tool_call → No validation → Handler falls back to first entity",
+      "fix_priority": "HIGH",
+      "required_changes": [
+        "Before calling handler, fetch CRM and validate entity_name exists",
+        "Return 404 with available entity list if entity not found",
+        "Log all validation failures for debugging"
+      ]
+    },
+    {
+      "id": "RC-005",
+      "title": "Incomplete Regex for Tool-Call Parsing",
+      "severity": "HIGH",
+      "file": "frontend/src/features/ai-assistant/AIAssistantDrawer.tsx",
+      "lines": "36-55",
+      "description": "Regex pattern for TOOL_CALL parsing: /TOOL_CALL:\\s*(\\{[^{}]*(?:\\{[^{}]*\\}[^{}]*)*\\})/g only handles ~2 levels of nesting",
+      "code_snippet": "const regex = /TOOL_CALL:\\s*(\\{[^{}]*(?:\\{[^{}]*\\}[^{}]*)*\\})/g;",
+      "impact": "Fails on moderately complex tool calls; unparsed markers are not removed, appear as raw JSON in UI",
+      "example_scenario": "LLM generates: TOOL_CALL: {...data: {nested: {value: 123}}...} → Regex fails → cleanToolCallMarkers() doesn't remove marker → User sees raw JSON",
+      "fix_priority": "HIGH",
+      "required_changes": [
+        "Replace regex with iterative JSON parser (find 'TOOL_CALL:' then parse JSON from that position)",
+        "Add try/catch to cleanToolCallMarkers to gracefully handle parsing failures",
+        "Never display unparseable markers to users"
+      ]
+    },
+    {
+      "id": "RC-006",
+      "title": "No Pre-Validation of LLM-Generated Arguments",
+      "severity": "MEDIUM",
+      "file": "backend/app/routers/copilot.py",
+      "lines": "195-220",
+      "description": "_universal_action_reply() generates tool calls with entity_name via fuzzy matching; no validation that matched entity exists",
+      "code_snippet": "target_entity_name = target_entity['name'] if target_entity else primary_entity_name  # May reference non-existent entity",
+      "impact": "Tool calls generated with potentially invalid entity names if entity resolution is uncertain",
+      "example_scenario": "Fuzzy match fails; code defaults to 'primary_entity_name' which may not match any real entity",
+      "fix_priority": "MEDIUM",
+      "required_changes": [
+        "Always validate that resolved entity_name exists in config.entities",
+        "Return error or clarification request if validation fails",
+        "Log fuzzy-match failures"
+      ]
+    },
+    {
+      "id": "RC-007",
+      "title": "Missing Required-Field Collection Workflow",
+      "severity": "MEDIUM",
+      "file": "backend/app/routers/copilot.py, backend/app/services/ai_tools.py",
+      "lines": "N/A",
+      "description": "create_record tool doesn't collect missing required fields before execution; backend validation errors reported to user without guidance",
+      "code_snippet": "No pre-collection of required fields; tool call generated with whatever data can be extracted from user message",
+      "impact": "Poor UX: user receives validation errors instead of being asked for missing fields in conversation",
+      "example_scenario": "User: 'Add John' → CRM requires name, email, phone → Tool call sent with only name → Backend validation fails → User must resubmit",
+      "fix_priority": "MEDIUM",
+      "required_changes": [
+        "Before generating create_record tool call, analyze required fields",
+        "If required fields missing, generate response asking user for those fields",
+        "Preserve context across multiple messages to build complete record"
+      ]
+    },
+    {
+      "id": "RC-008",
+      "title": "Raw Tool-Call Display When Parsing Fails",
+      "severity": "MEDIUM",
+      "file": "frontend/src/features/ai-assistant/AIAssistantDrawer.tsx",
+      "lines": "217-235",
+      "description": "If cleanToolCallMarkers() fails to remove markers (due to regex failure), raw TOOL_CALL JSON is displayed as part of AI message",
+      "code_snippet": "const displayText = cleanToolCallMarkers(res.reply);  // May contain TOOL_CALL markers if cleanToolCallMarkers() fails",
+      "impact": "Users see JSON fragments in conversation, breaking natural-language experience",
+      "example_scenario": "LLM reply: 'I've prepared... TOOL_CALL: {...}' → Regex fails → displayText still contains marker → User sees it",
+      "fix_priority": "MEDIUM",
+      "required_changes": [
+        "Improve cleanToolCallMarkers() to handle parsing failures gracefully",
+        "Never display raw tool-call markers to users; strip them even if parsing fails",
+        "If tool call unparseable, log warning and hide marker entirely"
+      ]
+    }
+  ],
+  "affected_components": {
+    "backend": [
+      {
+        "file": "backend/app/routers/copilot.py",
+        "functions": [
+          "_build_system_prompt()",
+          "_universal_action_reply()",
+          "execute_tool_call()",
+          "copilot_chat()"
+        ],
+        "issues": ["RC-002", "RC-003", "RC-004", "RC-006"]
+      },
+      {
+        "file": "backend/app/services/ai_tools.py",
+        "functions": [
+          "CRMSchemaTools._resolve_entity()",
+          "CRMSchemaTools.create_record()",
+          "CRMSchemaTools.update_record()"
+        ],
+        "issues": ["RC-001", "RC-006", "RC-007"]
+      },
+      {
+        "file": "backend/app/routers/records.py",
+        "functions": ["create_record()"],
+        "issues": ["No pre-validation; accepts entity_name without schema check"]
+      }
+    ],
+    "frontend": [
+      {
+        "file": "frontend/src/features/ai-assistant/AIAssistantDrawer.tsx",
+        "functions": [
+          "parseToolCalls()",
+          "cleanToolCallMarkers()",
+          "executeToolCall()",
+          "handleSend()"
+        ],
+        "issues": ["RC-005", "RC-008"]
+      }
+    ]
+  },
+  "data_flow_analysis": {
+    "current_flow": [
+      "User: 'Add a lead'",
+      "Frontend → /api/v1/copilot/chat",
+      "Backend: No dynamic entity list in prompt; hardcoded 'lead' examples",
+      "LLM: Generates 'entity_name: lead' from examples",
+      "Frontend: Regex fails (complex JSON); marker not removed",
+      "Frontend: Calls execute_tool_call with entity_name='lead'",
+      "Backend: No validation; passes to handler",
+      "Handler: _resolve_entity('lead') → NOT FOUND → returns entities[0] (wrong entity)",
+      "Backend: Creates record in WRONG entity",
+      "Frontend: User sees raw TOOL_CALL marker if regex failed"
+    ],
+    "required_flow": [
+      "User: 'Add a lead'",
+      "Frontend → /api/v1/copilot/chat",
+      "Backend: System prompt includes 'VALID ENTITY NAMES: [actual entities]'",
+      "LLM: Sees actual entities; generates tool call with valid entity_name",
+      "Frontend: Improved parser removes tool-call markers or asks for confirmation",
+      "Frontend: Calls execute_tool_call with valid entity_name",
+      "Backend: Validates entity_name exists in CRM",
+      "Handler: _resolve_entity() returns correct entity or None (error)",
+      "Backend: Creates record in CORRECT entity",
+      "Frontend: User sees clean confirmation, no raw JSON"
+    ]
+  },
+  "implementation_roadmap": {
+    "phase_1": {
+      "title": "System Prompt & Entity Context",
+      "priority": "HIGHEST",
+      "files_to_modify": ["backend/app/routers/copilot.py"],
+      "root_causes_addressed": ["RC-002", "RC-003"],
+      "effort": "Medium",
+      "risk": "Low (prompt changes only; no behavioral changes yet)"
+    },
+    "phase_2": {
+      "title": "Entity Resolution & Validation",
+      "priority": "HIGHEST",
+      "files_to_modify": [
+        "backend/app/services/ai_tools.py",
+        "backend/app/routers/copilot.py"
+      ],
+      "root_causes_addressed": ["RC-001", "RC-004", "RC-006"],
+      "effort": "Medium",
+      "risk": "Medium (changes core entity resolution; needs tests)"
+    },
+    "phase_3": {
+      "title": "Frontend Tool-Call Parsing",
+      "priority": "HIGH",
+      "files_to_modify": [
+        "frontend/src/features/ai-assistant/AIAssistantDrawer.tsx"
+      ],
+      "root_causes_addressed": ["RC-005", "RC-008"],
+      "effort": "Small",
+      "risk": "Low"
+    },
+    "phase_4": {
+      "title": "Required Field Collection",
+      "priority": "MEDIUM",
+      "files_to_modify": [
+        "backend/app/services/ai_tools.py",
+        "backend/app/routers/copilot.py"
+      ],
+      "root_causes_addressed": ["RC-007"],
+      "effort": "Large",
+      "risk": "Medium (new workflow; multi-turn conversation state)"
+    },
+    "phase_5": {
+      "title": "Comprehensive Testing & Integration",
+      "priority": "HIGH",
+      "files_to_create": [
+        "backend/tests/test_copilot_entity_resolution.py",
+        "backend/tests/test_copilot_required_fields.py",
+        "frontend/__tests__/copilot-tool-parsing.test.ts"
+      ],
+      "effort": "Large",
+      "risk": "Low"
+    }
+  },
+  "test_scenarios": [
+    {
+      "id": "TS-001",
+      "description": "CRM with Lead entity; user says 'add a lead'",
+      "expected": "Copilot uses lead entity; creates record in lead"
+    },
+    {
+      "id": "TS-002",
+      "description": "CRM with Contact entity but no Lead; user says 'add a lead'",
+      "expected": "Copilot asks for clarification or suggests Contact"
+    },
+    {
+      "id": "TS-003",
+      "description": "CRM with multiple entities (Lead, Contact, Deal); user says 'add a record'",
+      "expected": "Copilot asks which entity type"
+    },
+    {
+      "id": "TS-004",
+      "description": "CRM with only Machine Identifier entity; user says 'add a lead'",
+      "expected": "Copilot explains entity mismatch; offers available entities"
+    },
+    {
+      "id": "TS-005",
+      "description": "Create record with missing required fields",
+      "expected": "Copilot asks for missing fields in conversation (not validation error)"
+    },
+    {
+      "id": "TS-006",
+      "description": "User provides missing fields in follow-up message",
+      "expected": "Copilot collects all required info; creates record"
+    },
+    {
+      "id": "TS-007",
+      "description": "LLM returns valid native tool call",
+      "expected": "Frontend parses and executes; no raw markers displayed"
+    },
+    {
+      "id": "TS-008",
+      "description": "LLM returns textual tool-call representation",
+      "expected": "Frontend parses TOOL_CALL: {...} format; no raw markers in UI"
+    },
+    {
+      "id": "TS-009",
+      "description": "LLM returns malformed JSON in tool call",
+      "expected": "Backend/frontend handles gracefully; error message to user, no crashes"
+    },
+    {
+      "id": "TS-010",
+      "description": "LLM returns hardcoded entity name not in CRM",
+      "expected": "Backend rejects; offers available entities; no silent fallback"
+    },
+    {
+      "id": "TS-011",
+      "description": "Repeated requests to create same record",
+      "expected": "No duplicate records; idempotency or conflict detection"
+    },
+    {
+      "id": "TS-012",
+      "description": "CRM schema changes; Copilot uses updated schema",
+      "expected": "Copilot generates tool calls with new entity names"
+    },
+    {
+      "id": "TS-013",
+      "description": "Cross-tenant access attempt (User A accesses User B's CRM)",
+      "expected": "403/404 error; no data leak"
+    },
+    {
+      "id": "TS-014",
+      "description": "Tool call with complex nested data structures",
+      "expected": "Frontend parser handles correctly; no raw JSON displayed"
+    }
+  ],
+  "success_criteria": [
+    "User says 'add a lead' → Copilot uses actual lead entity if it exists",
+    "Copilot never generates tool calls with invalid entity names",
+    "Backend validates entity names before tool execution",
+    "Raw TOOL_CALL JSON never appears in user conversations",
+    "Missing required fields collected via natural conversation",
+    "All 14 test scenarios pass",
+    "No regression in existing Copilot functionality",
+    "Error messages are clear and actionable"
+  ]
+}

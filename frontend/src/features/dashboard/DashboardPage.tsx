@@ -1,10 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Sparkles,
   Layers,
   Database,
-  GitBranch,
   Dna,
   ArrowRight,
   TrendingUp,
@@ -12,6 +11,7 @@ import {
   FileSpreadsheet,
 } from 'lucide-react';
 import { useCRM } from '@/context/CRMContext';
+import { buildStageColorMap, getStageColor } from '@/utils/crmColors';
 import { useAuth } from '@/context/AuthContext';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -24,6 +24,15 @@ export const DashboardPage: React.FC = () => {
   const { user } = useAuth();
   const { crms, activeCRM, selectCRM, isLoading } = useCRM();
   const navigate = useNavigate();
+
+  const stageColorMap = useMemo(() => {
+    if (!activeCRM) return {};
+    return buildStageColorMap(
+      activeCRM.crm_id,
+      activeCRM.configuration.pipeline_stages || [],
+      activeCRM.configuration.ui_config?.stage_colors
+    );
+  }, [activeCRM]);
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
 
   useEffect(() => {
@@ -53,10 +62,10 @@ export const DashboardPage: React.FC = () => {
           <div className="flex flex-wrap items-center gap-3">
             <Button
               variant="yellow"
-              onClick={() => navigate('/create-crm')}
+              onClick={() => navigate('/chat-crm')}
               leftIcon={<Sparkles className="w-4 h-4" />}
             >
-              Generate New CRM
+              Build New CRM
             </Button>
             {activeCRM && (
               <Button
@@ -100,7 +109,7 @@ export const DashboardPage: React.FC = () => {
             </div>
           </div>
           <p className="text-2xl font-bold text-aura-navy mt-3">
-            {analytics?.total_leads ?? 0}
+            {(analytics as any)?.total_records ?? analytics?.total_leads ?? 0}
           </p>
           <p className="text-[11px] text-slate-400 mt-1">In active CRM entities</p>
         </Card>
@@ -108,17 +117,17 @@ export const DashboardPage: React.FC = () => {
         <Card className="p-4 sm:p-5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Conversion Rate
+              Pipeline Stages
             </span>
             <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
               <TrendingUp className="w-4 h-4" />
             </div>
           </div>
           <p className="text-2xl font-bold text-aura-navy mt-3">
-            {analytics ? `${(analytics.conversion_rate * 100).toFixed(1)}%` : '0%'}
+            {activeCRM?.configuration?.pipeline_stages?.length || 0}
           </p>
           <p className="text-[11px] text-slate-400 mt-1">
-            {analytics?.won_leads ?? 0} won deals
+            Configured workflow stages
           </p>
         </Card>
 
@@ -144,8 +153,8 @@ export const DashboardPage: React.FC = () => {
           icon={<Layers className="w-6 h-6" />}
           title="No CRMs Created Yet"
           description="AURA lets you create a tailor-made CRM architecture in seconds using natural language prompts."
-          actionLabel="Generate Your First CRM"
-          onAction={() => navigate('/create-crm')}
+          actionLabel="Build Your First CRM"
+          onAction={() => navigate('/chat-crm')}
         />
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -158,7 +167,7 @@ export const DashboardPage: React.FC = () => {
                     <h3 className="text-lg font-bold text-aura-navy">
                       {activeCRM.name}
                     </h3>
-                    <Badge variant={activeCRM.status}>{activeCRM.status}</Badge>
+                    <Badge variant="cyan">Selected Workspace</Badge>
                     <Badge variant="cyan">v{activeCRM.configuration_version}</Badge>
                   </div>
                   <p className="text-xs text-slate-500 mt-1">
@@ -227,16 +236,30 @@ export const DashboardPage: React.FC = () => {
                     Pipeline Stages
                   </h4>
                   <div className="flex flex-wrap items-center gap-2">
-                    {activeCRM.configuration.pipeline_stages.map((stage, i) => (
-                      <React.Fragment key={stage}>
-                        <div className="px-3 py-1 rounded-lg bg-slate-100 text-xs font-semibold text-aura-navy border border-slate-200">
-                          {stage}
-                        </div>
-                        {i < activeCRM.configuration.pipeline_stages.length - 1 && (
-                          <ArrowRight className="w-3.5 h-3.5 text-slate-300 shrink-0" />
-                        )}
-                      </React.Fragment>
-                    ))}
+                    {activeCRM.configuration.pipeline_stages.map((stage, i) => {
+                      const color = getStageColor(stageColorMap, stage);
+                      return (
+                        <React.Fragment key={stage}>
+                          <div
+                            className={`px-3 py-1 rounded-lg text-xs font-semibold border flex items-center gap-1.5 ${color.bgClass} ${color.textClass} ${color.borderClass}`}
+                            style={{
+                              backgroundColor: color.bgHex,
+                              borderColor: color.borderHex,
+                              color: color.textHex,
+                            }}
+                          >
+                            <span
+                              className="w-1.5 h-1.5 rounded-full shrink-0"
+                              style={{ backgroundColor: color.hex }}
+                            />
+                            {stage}
+                          </div>
+                          {i < activeCRM.configuration.pipeline_stages.length - 1 && (
+                            <ArrowRight className="w-3.5 h-3.5 text-slate-300 shrink-0" />
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -267,24 +290,6 @@ export const DashboardPage: React.FC = () => {
                   leftIcon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
                 >
                   Import CSV Dataset
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="w-full justify-start text-xs font-semibold"
-                  onClick={() => navigate('/evolution')}
-                  leftIcon={<Dna className="w-4 h-4 text-amber-500" />}
-                >
-                  Evolution Proposal Center
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="w-full justify-start text-xs font-semibold"
-                  onClick={() => navigate('/workflows')}
-                  leftIcon={<GitBranch className="w-4 h-4 text-aura-deep" />}
-                >
-                  Workflow Automations
                 </Button>
               </div>
             </Card>

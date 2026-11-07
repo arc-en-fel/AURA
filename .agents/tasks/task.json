@@ -1,0 +1,14 @@
+{
+  "task_id": "task-crm-generator-fix-global",
+  "task_description": "Fix the CRM generator architecture globally to preserve user-requested fields and enable post-generation editing. This work spans field extraction, validation, backend API endpoints, frontend schema editor, and AI tooling. Scoped to work for ALL CRM types universally.",
+  "status": "pending",
+  "feature_order": [
+    "FEAT-001",
+    "FEAT-002",
+    "FEAT-003",
+    "FEAT-004",
+    "FEAT-005",
+    "FEAT-006"
+  ],
+  "blocked_reason": null
+}

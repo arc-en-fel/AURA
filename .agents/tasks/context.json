@@ -1,0 +1,27 @@
+{
+  "project_type": "FastAPI backend + React/Vite frontend, multi-tenant SaaS CRM",
+  "language": "Python (backend), TypeScript/React (frontend)",
+  "build_system": "Python venv + pip for backend, npm for frontend. Concurrent dev servers on ports 8000 (backend) and 5173 (frontend).",
+  "test_framework": "pytest for backend, Jest/Vitest for frontend (if setup). Tests are in backend/tests/.",
+  "build_command": "Backend: `python -m pytest` (from backend/ directory). Frontend: `npm run build` (from frontend/ directory).",
+  "test_command": "Backend: `python -m pytest backend/tests/ -v`. Frontend: `npm test` if configured.",
+  "verification_instructions": "Start dev servers with `./start-dev.bat` on Windows. Backend health: `curl http://localhost:8000/api/v1/health`. Frontend: open `http://localhost:5173`. All backend changes must pass pytest; frontend changes must render without TypeScript errors.",
+  "snapshot_or_generated_files": null,
+  "environment_constraints": "Backend uses Supabase PostgreSQL + Auth. Never commit .env files. LLM provider (Ollama/Grok/Mock) configured via LLM_PROVIDER env var. Frontend must never expose service-role credentials.",
+  "contribution_requirements": "Read AGENTS.md strictly. All AI-generated configurations must be validated via Pydantic before use. No arbitrary SQL or code execution. Enforce authentication and CRM ownership on every endpoint. Maintain API contract compatibility; update docs/API_CONTRACTS.md with any new endpoints. Every new feature must have tests; run full test suite before claiming completion.",
+  "key_patterns": "Canonical field representation: CanonicalField (TypeScript interface) = CRMField (Pydantic model). SchemaPreservation and FieldExtractor services already exist and work correctly; they just need to be integrated into the main /generate endpoint (currently missing). RLS policies enforce tenant isolation on crms and records tables. Response envelope: {data: {...}, meta: {request_id: string}}.",
+  "relevant_files": [
+    "backend/app/routers/crm.py",
+    "backend/app/routers/records.py",
+    "backend/app/schemas/crm.py",
+    "backend/app/services/schema_preservation.py",
+    "backend/app/services/field_extractor.py",
+    "backend/app/services/ollama_provider.py",
+    "backend/app/database.py",
+    "docs/API_CONTRACTS.md",
+    "frontend/src/features/crms/",
+    "frontend/src/components/",
+    "AGENTS.md"
+  ],
+  "directory_structure": "Project root: d:\\AURA - Copy. Backend: backend/ (app/, tests/, .env). Frontend: frontend/ (src/components, src/features/crms, src/pages). Docs: docs/ (API_CONTRACTS.md, CRM_SCHEMA.json). Supabase config: supabase/. Database schema: schemas in backend/app/schemas/"
+}

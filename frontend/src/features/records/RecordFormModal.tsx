@@ -6,6 +6,7 @@ import { Select } from '@/components/ui/Select';
 import { CRMEntity, CRMRecord, CRMField } from '@/types/crm';
 import { api } from '@/services/api';
 import { useToast } from '@/context/ToastContext';
+import { useCRM } from '@/context/CRMContext';
 
 export interface RecordFormModalProps {
   isOpen: boolean;
@@ -24,6 +25,7 @@ export const RecordFormModal: React.FC<RecordFormModalProps> = ({
   record,
   onSaved,
 }) => {
+  const { activeCRM } = useCRM();
   const { success, error: toastError } = useToast();
   const [formData, setFormData] = useState<Record<string, unknown>>({});
   const [source, setSource] = useState<string>('Manual');
@@ -38,16 +40,18 @@ export const RecordFormModal: React.FC<RecordFormModalProps> = ({
       setSource(record.source || 'Manual');
     } else {
       const initial: Record<string, unknown> = {};
+      const stages = activeCRM?.configuration?.pipeline_stages || [];
       entity.fields.forEach((f) => {
         if (f.type === 'boolean') initial[f.name] = false;
         else if (f.type === 'select' && f.options?.length) initial[f.name] = f.options[0];
+        else if (f.type === 'status') initial[f.name] = (f.options?.length ? f.options[0] : (stages[0] || ''));
         else initial[f.name] = '';
       });
       setFormData(initial);
       setSource('Manual');
     }
     setErrors({});
-  }, [record, entity, isOpen]);
+  }, [record, entity, isOpen, activeCRM]);
 
   const handleChange = (fieldName: string, value: unknown) => {
     setFormData((prev) => ({ ...prev, [fieldName]: value }));
@@ -75,7 +79,7 @@ export const RecordFormModal: React.FC<RecordFormModalProps> = ({
           errs[field.name] = 'Invalid email format.';
         }
       }
-      if (val && field.type === 'number') {
+      if (val && (field.type === 'number' || field.type === 'currency')) {
         if (isNaN(Number(val))) {
           errs[field.name] = 'Must be a valid number.';
         }
@@ -96,7 +100,7 @@ export const RecordFormModal: React.FC<RecordFormModalProps> = ({
       const cleanedData: Record<string, unknown> = {};
       entity.fields.forEach((f) => {
         const v = formData[f.name];
-        if (f.type === 'number' && v !== '' && v !== undefined) {
+        if ((f.type === 'number' || f.type === 'currency') && v !== '' && v !== undefined) {
           cleanedData[f.name] = Number(v);
         } else if (f.type === 'boolean') {
           cleanedData[f.name] = Boolean(v);
@@ -161,6 +165,33 @@ export const RecordFormModal: React.FC<RecordFormModalProps> = ({
           </div>
         );
 
+      case 'status': {
+        const stages = activeCRM?.configuration?.pipeline_stages || [];
+        const statusOptions = field.options && field.options.length > 0 ? field.options : stages;
+        
+        // Validate that we have valid status options; error if missing
+        if (!statusOptions || statusOptions.length === 0) {
+          return (
+            <div key={field.name} className="text-sm text-rose-600">
+              Error: {field.label} has no options configured in the CRM schema.
+            </div>
+          );
+        }
+        
+        return (
+          <div key={field.name}>
+            <Select
+              label={field.label}
+              required={field.required}
+              options={statusOptions}
+              value={String(val ?? statusOptions[0] ?? '')}
+              onChange={(e) => handleChange(field.name, e.target.value)}
+              error={errorMsg}
+            />
+          </div>
+        );
+      }
+
       case 'boolean':
         return (
           <div key={field.name} className="flex items-center gap-3 pt-2">
@@ -177,6 +208,22 @@ export const RecordFormModal: React.FC<RecordFormModalProps> = ({
             >
               {field.label} {field.required && <span className="text-rose-500">*</span>}
             </label>
+          </div>
+        );
+
+      case 'currency':
+        return (
+          <div key={field.name}>
+            <Input
+              label={`${field.label} ($)`}
+              type="number"
+              step="any"
+              required={field.required}
+              value={val !== undefined ? String(val) : ''}
+              onChange={(e) => handleChange(field.name, e.target.value)}
+              placeholder="0.00"
+              error={errorMsg}
+            />
           </div>
         );
 
@@ -200,6 +247,20 @@ export const RecordFormModal: React.FC<RecordFormModalProps> = ({
             <Input
               label={field.label}
               type="date"
+              required={field.required}
+              value={String(val ?? '')}
+              onChange={(e) => handleChange(field.name, e.target.value)}
+              error={errorMsg}
+            />
+          </div>
+        );
+
+      case 'datetime':
+        return (
+          <div key={field.name}>
+            <Input
+              label={field.label}
+              type="datetime-local"
               required={field.required}
               value={String(val ?? '')}
               onChange={(e) => handleChange(field.name, e.target.value)}
@@ -238,6 +299,21 @@ export const RecordFormModal: React.FC<RecordFormModalProps> = ({
           </div>
         );
 
+      case 'url':
+        return (
+          <div key={field.name}>
+            <Input
+              label={field.label}
+              type="url"
+              required={field.required}
+              value={String(val ?? '')}
+              onChange={(e) => handleChange(field.name, e.target.value)}
+              placeholder="https://example.com"
+              error={errorMsg}
+            />
+          </div>
+        );
+
       case 'text':
       default:
         return (
@@ -255,6 +331,17 @@ export const RecordFormModal: React.FC<RecordFormModalProps> = ({
     }
   };
 
+  const footer = (
+    <>
+      <Button type="button" variant="outline" size="sm" onClick={onClose}>
+        Cancel
+      </Button>
+      <Button type="submit" form="record-form" variant="primary" size="sm" isLoading={isSubmitting}>
+        {isEditing ? 'Save Changes' : 'Create Record'}
+      </Button>
+    </>
+  );
+
   return (
     <Modal
       isOpen={isOpen}
@@ -262,32 +349,22 @@ export const RecordFormModal: React.FC<RecordFormModalProps> = ({
       title={isEditing ? `Edit ${entity.label} Record` : `Create New ${entity.label}`}
       description={`Fields dynamically configured per ${entity.label} schema definition.`}
       maxWidth="lg"
+      scrollable={true}
+      footer={footer}
     >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Dynamic Fields */}
-        <div className="space-y-3 max-h-[60vh] overflow-y-auto px-1">
-          {entity.fields.map((field) => renderFieldInput(field))}
+      <form id="record-form" onSubmit={handleSubmit} className="space-y-3 pb-2">
+        {entity.fields.map((field) => renderFieldInput(field))}
 
-          {!isEditing && (
-            <div className="pt-2 border-t border-slate-100">
-              <Input
-                label="Acquisition Source Tag"
-                value={source}
-                onChange={(e) => setSource(e.target.value)}
-                placeholder="e.g. Manual, Inbound, Conference"
-              />
-            </div>
-          )}
-        </div>
-
-        <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
-          <Button type="button" variant="outline" size="sm" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="primary" size="sm" isLoading={isSubmitting}>
-            {isEditing ? 'Save Changes' : 'Create Record'}
-          </Button>
-        </div>
+        {!isEditing && (
+          <div className="pt-2 border-t border-slate-100">
+            <Input
+              label="Record Source (Optional)"
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+              placeholder="e.g. Manual, Inbound, Direct"
+            />
+          </div>
+        )}
       </form>
     </Modal>
   );
