@@ -27,12 +27,19 @@ export interface CRMEntity {
   fields: CRMField[];
 }
 
+export interface UIConfig {
+  /** Mapping of pipeline stage name → palette color key (e.g. 'New' → 'blue') */
+  stage_colors?: Record<string, string>;
+  [key: string]: unknown;
+}
+
 export interface CRMConfiguration {
   schema_version: '1.0';
   name: string;
   industry: string;
   entities: CRMEntity[];
   pipeline_stages: string[];
+  ui_config?: UIConfig | null;
 }
 
 export interface GenerateCRMResponse {
@@ -81,6 +88,9 @@ export interface ImportRowError {
 export interface ImportResult {
   created: number;
   skipped: number;
+  duplicate?: number;
+  failed?: number;
+  total_rows?: number;
   errors: ImportRowError[];
 }
 
@@ -122,6 +132,7 @@ export interface CreateWorkflowPayload {
 export interface AnalyticsMetricItem {
   value?: string;
   name?: string;
+  status?: string;
   count: number;
   percentage?: number;
   [key: string]: unknown;
@@ -135,6 +146,8 @@ export interface NumericMetricItem {
   average: number;
   min: number;
   max: number;
+  median?: number;
+  values?: number[];
 }
 
 export interface CategoricalMetricItem {
@@ -156,7 +169,9 @@ export interface AnalyticsData {
   total_records?: number;
   entity_name?: string;
   entity_label?: string;
+  status_distribution?: AnalyticsMetricItem[];
   by_stage?: AnalyticsMetricItem[];
+  missing_status_count?: number;
   by_source?: AnalyticsMetricItem[];
   numeric_metrics?: NumericMetricItem[] | Record<string, any>;
   categorical_metrics?: CategoricalMetricItem[] | Record<string, any>;
@@ -166,6 +181,7 @@ export interface AnalyticsData {
     primary_entity_label?: string;
     pipeline_stages?: string[];
     stage_field_name?: string | null;
+    stage_field_label?: string | null;
     source_field_name?: string | null;
     available_fields?: string[];
     categorical_fields?: Array<{ name: string; label: string }>;

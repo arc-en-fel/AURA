@@ -51,48 +51,48 @@ function makeWelcome(crmName: string): Message {
  */
 function parseToolCalls(text: string): ToolCall[] {
   const toolCalls: ToolCall[] = [];
-  
+
   // Find all "TOOL_CALL:" markers in the text
   let searchStart = 0;
   while (true) {
     const markerIndex = text.indexOf('TOOL_CALL:', searchStart);
     if (markerIndex === -1) break;
-    
+
     // Find the start of the JSON object (first '{' after the marker)
     let jsonStart = markerIndex + 'TOOL_CALL:'.length;
     while (jsonStart < text.length && /\s/.test(text[jsonStart])) {
       jsonStart++; // Skip whitespace
     }
-    
+
     if (jsonStart >= text.length || text[jsonStart] !== '{') {
       searchStart = markerIndex + 1;
       continue;
     }
-    
+
     // Try to parse JSON from this position
     let braceCount = 0;
     let jsonEnd = jsonStart;
     let inString = false;
     let escaped = false;
-    
+
     for (let i = jsonStart; i < text.length; i++) {
       const char = text[i];
-      
+
       if (escaped) {
         escaped = false;
         continue;
       }
-      
+
       if (char === '\\') {
         escaped = true;
         continue;
       }
-      
+
       if (char === '"' && !escaped) {
         inString = !inString;
         continue;
       }
-      
+
       if (!inString) {
         if (char === '{') braceCount++;
         else if (char === '}') {
@@ -104,7 +104,7 @@ function parseToolCalls(text: string): ToolCall[] {
         }
       }
     }
-    
+
     if (braceCount === 0 && jsonEnd > jsonStart) {
       const jsonStr = text.substring(jsonStart, jsonEnd);
       try {
@@ -116,10 +116,10 @@ function parseToolCalls(text: string): ToolCall[] {
         console.warn('Failed to parse tool call:', jsonStr, e);
       }
     }
-    
+
     searchStart = jsonEnd || markerIndex + 1;
   }
-  
+
   return toolCalls;
 }
 
@@ -132,46 +132,46 @@ function parseToolCalls(text: string): ToolCall[] {
 function cleanToolCallMarkers(text: string): string {
   let result = text;
   let searchStart = 0;
-  
+
   while (true) {
     const markerIndex = result.indexOf('TOOL_CALL:', searchStart);
     if (markerIndex === -1) break;
-    
+
     // Find the start of the JSON object
     let jsonStart = markerIndex + 'TOOL_CALL:'.length;
     while (jsonStart < result.length && /\s/.test(result[jsonStart])) {
       jsonStart++;
     }
-    
+
     if (jsonStart >= result.length || result[jsonStart] !== '{') {
       searchStart = markerIndex + 1;
       continue;
     }
-    
+
     // Find the end of the JSON object
     let braceCount = 0;
     let jsonEnd = jsonStart;
     let inString = false;
     let escaped = false;
-    
+
     for (let i = jsonStart; i < result.length; i++) {
       const char = result[i];
-      
+
       if (escaped) {
         escaped = false;
         continue;
       }
-      
+
       if (char === '\\') {
         escaped = true;
         continue;
       }
-      
+
       if (char === '"' && !escaped) {
         inString = !inString;
         continue;
       }
-      
+
       if (!inString) {
         if (char === '{') braceCount++;
         else if (char === '}') {
@@ -183,7 +183,7 @@ function cleanToolCallMarkers(text: string): string {
         }
       }
     }
-    
+
     // Remove the marker and JSON object
     if (jsonEnd > jsonStart) {
       result = result.substring(0, markerIndex) + result.substring(jsonEnd);
@@ -192,7 +192,7 @@ function cleanToolCallMarkers(text: string): string {
       searchStart = markerIndex + 1;
     }
   }
-  
+
   return result.trim();
 }
 
@@ -250,16 +250,39 @@ export const AIAssistantDrawer: React.FC<AIAssistantDrawerProps> = ({ isOpen, on
     }
 
     try {
-      await api.executeToolCall(crmId, {
+      const response = await api.executeToolCall(crmId, {
         tool_name: toolCall.name,
         arguments: toolCall.arguments,
       });
 
-      // Show success message in chat
+      // Show human-readable, canonical success message in chat
       const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      let detail = '';
+      if (toolCall.name === 'create_record') {
+        const entName = toolCall.arguments?.entity_name || 'record';
+        const recId = response?.data?.id ? ` (ID: ${response.data.id})` : '';
+        detail = `created ${entName} record${recId}.`;
+      } else if (toolCall.name === 'update_record') {
+        detail = `updated record.`;
+      } else if (toolCall.name === 'delete_record') {
+        detail = `deleted record.`;
+      } else if (toolCall.name === 'add_crm_field') {
+        detail = `added field '${toolCall.arguments?.label || toolCall.arguments?.field_name}'.`;
+      } else if (toolCall.name === 'update_crm_field') {
+        detail = `updated field '${toolCall.arguments?.field_name}'.`;
+      } else if (toolCall.name === 'delete_crm_field') {
+        detail = `deleted field '${toolCall.arguments?.field_name}'.`;
+      } else if (toolCall.name === 'add_crm_stage') {
+        detail = `added pipeline stage '${toolCall.arguments?.stage_name}'.`;
+      } else if (toolCall.name === 'delete_crm_stage') {
+        detail = `deleted pipeline stage '${toolCall.arguments?.stage_name}'.`;
+      } else {
+        detail = `executed '${toolCall.name}'.`;
+      }
+
       const successMsg: Message = {
         sender: 'ai',
-        text: `✓ Successfully executed '${toolCall.name}'. Changes saved.`,
+        text: `✓ Successfully ${detail} Changes saved.`,
         time: now,
       };
       setMessages((prev) => [...prev, successMsg]);
@@ -270,7 +293,7 @@ export const AIAssistantDrawer: React.FC<AIAssistantDrawerProps> = ({ isOpen, on
       const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const errorMsg: Message = {
         sender: 'ai',
-        text: `✗ Operation failed: ${errorText}`,
+        text: `✗ Operation failed: ${errorText}. No changes were committed.`,
         time: now,
       };
       setMessages((prev) => [...prev, errorMsg]);
@@ -367,7 +390,7 @@ export const AIAssistantDrawer: React.FC<AIAssistantDrawerProps> = ({ isOpen, on
 
       // Parse tool calls from the reply
       const toolCalls = parseToolCalls(res.reply);
-      
+
       // Remove tool call markers from display text
       const displayText = cleanToolCallMarkers(res.reply);
 
@@ -375,34 +398,49 @@ export const AIAssistantDrawer: React.FC<AIAssistantDrawerProps> = ({ isOpen, on
 
       // If there are tool calls, execute them
       if (toolCalls.length > 0) {
+        let anyDangerousConfirmed = false;
+
         for (const toolCall of toolCalls) {
           // Check if tool requires confirmation (dangerous operations)
           const dangerousTools = ['delete_record', 'delete_crm_field', 'delete_crm_stage'];
           if (dangerousTools.includes(toolCall.name)) {
-            // Show confirmation UI
+            anyDangerousConfirmed = true;
             await showToolConfirmationDialog(toolCall);
           } else {
             // Execute immediately
             await executeToolCall(toolCall);
           }
         }
-      }
 
-      // Add AI response to chat
-      const aiMsg: Message = {
-        sender: 'ai',
-        text: displayText,
-        time: replyTime,
-        action:
-          res.nav_route && res.nav_label
-            ? { label: res.nav_label, route: res.nav_route }
-            : undefined,
-      };
-      setMessages((prev) => [...prev, aiMsg]);
+        // If dangerous operations were triggered, user sees proposal in dialog and chat.
+        // If immediate tools ran, executeToolCall already displayed truthful outcome (success or error).
+        if (anyDangerousConfirmed) {
+          const aiMsg: Message = {
+            sender: 'ai',
+            text: displayText,
+            time: replyTime,
+            action:
+              res.nav_route && res.nav_label
+                ? { label: res.nav_label, route: res.nav_route }
+                : undefined,
+          };
+          setMessages((prev) => [...prev, aiMsg]);
+        }
 
-      // Refresh relevant data after tool execution
-      if (toolCalls.length > 0) {
+        // Refresh relevant data after tool execution
         refreshDataAfterToolExecution(toolCalls);
+      } else {
+        // No tool calls — conversational response
+        const aiMsg: Message = {
+          sender: 'ai',
+          text: displayText,
+          time: replyTime,
+          action:
+            res.nav_route && res.nav_label
+              ? { label: res.nav_label, route: res.nav_route }
+              : undefined,
+        };
+        setMessages((prev) => [...prev, aiMsg]);
       }
 
     } catch (err: unknown) {
@@ -482,11 +520,10 @@ export const AIAssistantDrawer: React.FC<AIAssistantDrawerProps> = ({ isOpen, on
                 className={`flex flex-col ${m.sender === 'user' ? 'items-end' : 'items-start'}`}
               >
                 <div
-                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-xs leading-relaxed ${
-                    m.sender === 'user'
+                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-xs leading-relaxed ${m.sender === 'user'
                       ? 'bg-aura-deep text-white rounded-tr-xs'
                       : 'bg-slate-100 text-aura-charcoal rounded-tl-xs border border-slate-200/60'
-                  }`}
+                    }`}
                 >
                   <p className="whitespace-pre-wrap">{m.text}</p>
                   {m.action && (

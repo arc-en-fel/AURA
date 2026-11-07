@@ -14,6 +14,7 @@ import logging
 from uuid import UUID
 
 from app.schemas.crm import CRMConfiguration, CRMEntity, CRMField, FieldType
+from app.services.color_assignment import ensure_ui_config, handle_stage_rename, handle_stage_delete
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +207,10 @@ class CRMSchemaEditor:
                 raise ValueError(f"Invalid position {position}")
             config["pipeline_stages"].insert(position, stage_name)
 
+        # Assign color if ui_config is present
+        if config.get("ui_config"):
+            config = ensure_ui_config(config, "editor")
+
         logger.info(
             "[CRMEditor] Added pipeline stage '%s' at position %s",
             stage_name,
@@ -231,6 +236,7 @@ class CRMSchemaEditor:
             raise ValueError(f"Stage '{new_stage_name}' already exists")
 
         config["pipeline_stages"][idx] = new_stage_name
+        config = handle_stage_rename(config, old_stage_name, new_stage_name)
 
         logger.info(
             "[CRMEditor] Renamed stage '%s' → '%s'",
@@ -255,6 +261,7 @@ class CRMSchemaEditor:
             raise ValueError("Cannot delete last pipeline stage")
 
         config["pipeline_stages"] = [s for s in config["pipeline_stages"] if s != stage_name]
+        config = handle_stage_delete(config, stage_name)
 
         logger.info("[CRMEditor] Deleted pipeline stage '%s'", stage_name)
 

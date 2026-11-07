@@ -1,0 +1,206 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "review_date": "2025-04-15",
+  "summary": "Design is well-structured and identifies the root cause correctly, but contains 1 HIGH-severity gap and 9 MEDIUM-severity ambiguities that must be resolved before implementation. All findings are concrete and actionable.",
+  "findings_count": {
+    "HIGH": 1,
+    "MEDIUM": 9,
+    "NIT": 2,
+    "total": 12
+  },
+  "findings": [
+    {
+      "id": 1,
+      "severity": "HIGH",
+      "category": "Algorithm specification",
+      "title": "Ambiguous Header-to-Field Resolution Order — May Produce Incorrect Matches",
+      "location": "Design section 3: CSVHeaderResolver._find_field_for_header algorithm",
+      "problem": "The resolution algorithm's pseudocode does not clarify precedence between canonical-name matches and label matches. When both could apply, it's unclear which wins. The pseudocode also does not clearly show ambiguity detection when multiple fields could match.",
+      "concrete_fix": "Provide explicit pseudocode with clear precedence: (1) canonical names, (2) labels, (3) formatting equivalence. Show how ambiguity is detected. Include decision matrix or flowchart."
+    },
+    {
+      "id": 2,
+      "severity": "MEDIUM",
+      "category": "Specification clarity",
+      "title": "Contradictory Treatment of Spaces/Underscores in Normalization",
+      "location": "Design section 3: _normalize_header and _normalize_for_comparison functions",
+      "problem": "The design defines two normalization functions but doesn't clearly state when each is applied. Example: does 'customer name' (with space) match 'customer_name' (with underscore) in step 2 or step 3? The pseudocode is ambiguous.",
+      "concrete_fix": "Explicitly define when each normalization function is applied. Either apply _normalize_for_comparison() upfront to all headers, or show clear pseudocode for when each normalization is used."
+    },
+    {
+      "id": 3,
+      "severity": "MEDIUM",
+      "category": "Missing specification",
+      "title": "Missing Specification for Building Lookup Tables in __init__",
+      "location": "Design section 3: CSVHeaderResolver.__init__ and _build_lookup_tables",
+      "problem": "The __init__ method calls _build_lookup_tables() which is never defined. The structure of _field_by_label (single field vs. list of fields for ambiguous labels) is unclear.",
+      "concrete_fix": "Add explicit pseudocode for _build_lookup_tables() showing how lookup tables are initialized, how ambiguous labels are stored, and how they're handled during resolution."
+    },
+    {
+      "id": 4,
+      "severity": "MEDIUM",
+      "category": "Error handling",
+      "title": "Unclear Error Message for Duplicate Columns",
+      "location": "Design section 3: resolve_headers error messages for duplicates",
+      "problem": "The error message format for duplicates references 'seen_canonical' but doesn't specify what this stores. The pseudocode doesn't clearly track the original CSV header that caused each duplicate.",
+      "concrete_fix": "Explicitly define seen_canonical as mapping canonical_field_name to original_raw_csv_header. Update pseudocode to show tracking and error message formatting clearly."
+    },
+    {
+      "id": 5,
+      "severity": "MEDIUM",
+      "category": "Design decision",
+      "title": "Frontend Implementation Option Not Decided",
+      "location": "Design section 5: Frontend Integration — Option A vs. Option B",
+      "problem": "Design offers two options (backend endpoint vs. TypeScript reimplementation) but chooses Option B without justifying the choice or addressing synchronization risks. If Python and TypeScript implementations diverge, preview and import will behave differently.",
+      "concrete_fix": "Either recommend Option A (backend validation endpoint) to eliminate sync issues, or if Option B is chosen, add explicit requirements: maintain single source of truth, add regression tests comparing both implementations, update both in same PR."
+    },
+    {
+      "id": 6,
+      "severity": "MEDIUM",
+      "category": "Edge cases",
+      "title": "Empty/Malformed CSV Handling Not Fully Specified",
+      "location": "Design section 3: error handling for empty/whitespace headers",
+      "problem": "Design handles empty files and missing headers, but doesn't specify behavior for headers that are entirely whitespace after trimming (e.g., '  ' or tab character).",
+      "concrete_fix": "Add explicit handling for empty headers in resolve_headers pseudocode. Add Test Case 21: CSV with whitespace-only column header is rejected with 'Empty column header' error."
+    },
+    {
+      "id": 7,
+      "severity": "MEDIUM",
+      "category": "Specification clarity",
+      "title": "Row-Level Error Handling vs. Header Validation Interaction Not Specified",
+      "location": "Design section 2 and 3: transition from header validation to row processing",
+      "problem": "Design doesn't clarify the contract between header resolution and row validation. After header validation succeeds, are we guaranteed that all row keys will be valid canonical names? What if an edge case introduces a key that wasn't validated?",
+      "concrete_fix": "Add note clarifying: (1) All keys in header_mapping are guaranteed valid canonical names, (2) Remapped rows will only contain keys in schema, (3) Row validation's 'unknown field' check is redundant but acts as safety net. Verify this in code."
+    },
+    {
+      "id": 8,
+      "severity": "MEDIUM",
+      "category": "Test specification",
+      "title": "Test Case 17 (Preview-Backend Consistency) Lacks Specification",
+      "location": "Requirements section, Acceptance criteria, Test Case 17",
+      "problem": "Test case 17 is vague: 'verify identical header-resolution rules' but doesn't specify test inputs, expected outputs, or how to measure consistency. If Option B (TypeScript) is used, consistency is not automatically guaranteed.",
+      "concrete_fix": "Expand Test Case 17 with explicit test inputs, expected outputs, and verification steps. If Option B is used, add test that calls both Python and TypeScript resolvers with identical input and asserts outputs are identical."
+    },
+    {
+      "id": 9,
+      "severity": "MEDIUM",
+      "category": "Verification",
+      "title": "Design Does Not Reference Actual API_CONTRACTS.md Endpoint Specification",
+      "location": "Design overview and section 1: Backend Flow",
+      "problem": "Design describes modifying the import endpoint but doesn't cite or verify against the actual API_CONTRACTS.md section 5.10. Doesn't confirm error response format matches contract or whether new error codes require contract updates.",
+      "concrete_fix": "Add section 'API Contract Verification' that cites section 5.10, confirms request/response formats remain unchanged, and documents new error codes (UNKNOWN_COLUMN, DUPLICATE_COLUMN, AMBIGUOUS_HEADER) to be added to API_CONTRACTS.md."
+    },
+    {
+      "id": 10,
+      "severity": "MEDIUM",
+      "category": "Test specification",
+      "title": "Missing Specification for Validation of Multiple Entity Types",
+      "location": "Requirements section, Acceptance criteria, Test Case 14",
+      "problem": "Test Case 14 (universal solution for multiple CRMs) is vague. Doesn't specify which CRM types to test, field overlaps, or whether resolver is properly scoped per entity.",
+      "concrete_fix": "Expand Test Case 14 with specific CRM configurations (different field names, overlapping field names, ambiguous labels) and verify that each CRM's resolver is independent."
+    },
+    {
+      "id": 11,
+      "severity": "NIT",
+      "category": "Performance",
+      "title": "Performance Claim Not Validated Against Implementation",
+      "location": "Design section: Performance Considerations",
+      "problem": "Design claims header resolution completes in '< 1ms' for typical CSVs but provides no benchmark. The pseudocode is O(n*m) which should be verified empirically.",
+      "concrete_fix": "Either add a performance benchmark test case (e.g., 100 headers, 100 fields) to the test suite, or replace the specific '< 1ms' claim with a less specific statement like 'Performs well for typical CSVs and entities'."
+    },
+    {
+      "id": 12,
+      "severity": "NIT",
+      "category": "Specification completeness",
+      "title": "Frontend TypeScript Implementation Skeleton Not Provided",
+      "location": "Design section 5: Frontend Integration",
+      "problem": "Design provides incomplete pseudocode for TypeScript resolver. Comment says 'Implement same normalization and resolution logic' but doesn't specify what that logic is. Could lead to divergence.",
+      "concrete_fix": "If Option B (TypeScript implementation) is chosen, provide complete pseudocode for TypeScript version. Otherwise, defer detail to implementation and add explicit requirement to sync both versions."
+    }
+  ],
+  "verified_assumptions": [
+    {
+      "id": "VA1",
+      "assumption": "Field labels and canonical names exist in the schema",
+      "verified": true,
+      "evidence": "backend/app/schemas/crm.py: CRMField has both 'name' (lowercase identifier) and 'label' (string, 1-100 chars)"
+    },
+    {
+      "id": "VA2",
+      "assumption": "Current backend validation compares CSV headers directly against canonical names without normalization",
+      "verified": true,
+      "evidence": "backend/app/routers/records.py lines 250-254: field_names = {f.name for f in entity.fields}; csv_fields = set(reader.fieldnames or []); unknown_fields = csv_fields - field_names"
+    },
+    {
+      "id": "VA3",
+      "assumption": "Frontend CSV preview does not validate headers",
+      "verified": true,
+      "evidence": "frontend/src/features/records/CSVImportModal.tsx lines 40-60: handleFileChange() parses CSV without header normalization"
+    },
+    {
+      "id": "VA4",
+      "assumption": "Existing validate_csv_row() works with canonical field names",
+      "verified": true,
+      "evidence": "backend/app/services/validation.py line 155+: Checks row keys against field_map (canonical names)"
+    },
+    {
+      "id": "VA5",
+      "assumption": "UTF-8 BOM handling already implemented",
+      "verified": true,
+      "evidence": "backend/app/routers/records.py line 240: text = content.decode('utf-8-sig')"
+    },
+    {
+      "id": "VA6",
+      "assumption": "API response format for import is {created, skipped, errors}",
+      "verified": true,
+      "evidence": "backend/app/routers/records.py lines 288-294: success_response includes created, skipped, errors"
+    },
+    {
+      "id": "VA7",
+      "assumption": "Authorization checks enforced in import endpoint",
+      "verified": true,
+      "evidence": "backend/app/routers/records.py lines 213-219: _verify_crm_access() checks ownership"
+    },
+    {
+      "id": "VA8",
+      "assumption": "File size and row count limits already enforced",
+      "verified": true,
+      "evidence": "backend/app/routers/records.py: MAX_CSV_SIZE = 5MB, MAX_CSV_ROWS = 10000, validation checks present"
+    }
+  ],
+  "unverified_assumptions": [
+    {
+      "id": "UA1",
+      "assumption": "Display labels are unique within an entity (enforced by schema validation)",
+      "status": "partially_unverified",
+      "evidence": "Design claims uniqueness is enforced in backend/app/schemas/crm.py, but no explicit validator found that enforces label uniqueness",
+      "impact": "If labels are not unique, resolver's ambiguity handling becomes critical but is unclear (see Finding #1)"
+    },
+    {
+      "id": "UA2",
+      "assumption": "Frontend can call backend validation endpoint or re-implement resolver",
+      "status": "not_addressed",
+      "evidence": "No preview endpoint exists in codebase. Design proposes two options but doesn't commit to either",
+      "impact": "Implementation path unclear until approach is decided"
+    },
+    {
+      "id": "UA3",
+      "assumption": "Preview and import use different parsing logic",
+      "status": "verified_as_correct",
+      "evidence": "Frontend uses string.split(); backend uses csv.DictReader()",
+      "impact": "Design correctly identifies this as source of inconsistency"
+    }
+  ],
+  "implementation_readiness": false,
+  "blocking_issues": [
+    "Finding #1: HIGH severity — ambiguous resolution algorithm must be clarified",
+    "Finding #5: MEDIUM severity — frontend approach (Option A vs B) must be decided"
+  ],
+  "recommendations": [
+    "Before implementation, resolve findings #1–5 with design author",
+    "Add explicit test fixtures and data for findings #6–10",
+    "Make explicit frontend decision: backend endpoint or TypeScript reimplementation",
+    "Verify label uniqueness enforcement in schema validation",
+    "Add cross-language test for Python/TypeScript resolver consistency"
+  ]
+}

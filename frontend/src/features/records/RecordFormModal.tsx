@@ -331,6 +331,17 @@ export const RecordFormModal: React.FC<RecordFormModalProps> = ({
     }
   };
 
+  const footer = (
+    <>
+      <Button type="button" variant="outline" size="sm" onClick={onClose}>
+        Cancel
+      </Button>
+      <Button type="submit" form="record-form" variant="primary" size="sm" isLoading={isSubmitting}>
+        {isEditing ? 'Save Changes' : 'Create Record'}
+      </Button>
+    </>
+  );
+
   return (
     <Modal
       isOpen={isOpen}
@@ -338,32 +349,22 @@ export const RecordFormModal: React.FC<RecordFormModalProps> = ({
       title={isEditing ? `Edit ${entity.label} Record` : `Create New ${entity.label}`}
       description={`Fields dynamically configured per ${entity.label} schema definition.`}
       maxWidth="lg"
+      scrollable={true}
+      footer={footer}
     >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Dynamic Fields */}
-        <div className="space-y-3 max-h-[60vh] overflow-y-auto px-1">
-          {entity.fields.map((field) => renderFieldInput(field))}
+      <form id="record-form" onSubmit={handleSubmit} className="space-y-3 pb-2">
+        {entity.fields.map((field) => renderFieldInput(field))}
 
-          {!isEditing && (
-            <div className="pt-2 border-t border-slate-100">
-              <Input
-                label="Record Source (Optional)"
-                value={source}
-                onChange={(e) => setSource(e.target.value)}
-                placeholder="e.g. Manual, Inbound, Direct"
-              />
-            </div>
-          )}
-        </div>
-
-        <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
-          <Button type="button" variant="outline" size="sm" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="primary" size="sm" isLoading={isSubmitting}>
-            {isEditing ? 'Save Changes' : 'Create Record'}
-          </Button>
-        </div>
+        {!isEditing && (
+          <div className="pt-2 border-t border-slate-100">
+            <Input
+              label="Record Source (Optional)"
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+              placeholder="e.g. Manual, Inbound, Direct"
+            />
+          </div>
+        )}
       </form>
     </Modal>
   );

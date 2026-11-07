@@ -42,6 +42,7 @@ from app.schemas.crm import (
     ReorderStagesRequest,
 )
 from app.services.ai_provider import get_ai_provider
+from app.services.color_assignment import ensure_ui_config
 
 router = APIRouter(prefix="/crm", tags=["CRM"])
 
@@ -89,6 +90,9 @@ async def generate_crm(
         
         # Validate with Pydantic
         config = CRMConfiguration(**config_dict)
+        config_out = config.model_dump()
+        import uuid as _uuid
+        config_out = ensure_ui_config(config_out, str(_uuid.uuid4()))
         
         # Forward any provider warnings
         warnings = list(getattr(provider, "last_warnings", []))
@@ -101,7 +105,7 @@ async def generate_crm(
             )
         
         return success_response({
-            "configuration": config.model_dump(),
+            "configuration": config_out,
             "warnings": warnings,
             "field_analysis": coverage,
         })
@@ -122,11 +126,21 @@ async def create_crm(body: SaveCRMRequest, user_id: CurrentUser):
     """Save a validated CRM configuration. Owner is derived from JWT."""
     repo = _get_repo()
     try:
+        cfg_dict = body.configuration.model_dump()
         crm = repo.create_crm(
             owner_id=user_id,
             name=body.configuration.name,
-            configuration=body.configuration.model_dump(),
+            configuration=cfg_dict,
         )
+        # Assign and persist stage colors scoped to saved crm_id
+        cfg_with_colors = ensure_ui_config(cfg_dict, str(crm['id']))
+        if cfg_with_colors.get('ui_config'):
+            repo.update_crm_configuration(
+                crm_id=str(crm['id']),
+                owner_id=user_id,
+                configuration=cfg_with_colors,
+            )
+            crm['configuration'] = cfg_with_colors
         return success_response(
             {
                 "crm_id": crm["id"],
@@ -197,6 +211,213 @@ async def update_crm_configuration(crm_id: UUID, user_id: CurrentUser):
         "Configuration changes must go through the evolution proposal approval process.",
     )
 
+
+@router.get("/{crm_id}/analytics")
+async def get_crm_analytics(crm_id: UUID, user_id: CurrentUser):
+    """Compute schema-driven analytics for the active CRM.
+    
+    Establishes one canonical status aggregation used by all status visualizations.
+    """
+    repo = _get_repo()
+    crm = repo.get_crm(str(crm_id), user_id)
+    if not crm:
+        return error_response(404, "NOT_FOUND", "CRM not found.")
+
+    config = crm.get("configuration", {})
+    entities = config.get("entities", [])
+    primary_entity = entities[0] if entities else None
+    stages = config.get("pipeline_stages", [])
+
+    primary_name = primary_entity.get("name") if primary_entity else None
+    primary_label = primary_entity.get("label", "Record") if primary_entity else "Record"
+
+    try:
+        records = repo.get_all_records(str(crm_id), primary_name, limit=5000)
+    except Exception:
+        records = []
+
+    total = len(records)
+
+    # 1. Resolve canonical status field dynamically from entity schema
+    status_field = None
+    if primary_entity:
+        fields = primary_entity.get("fields", [])
+        # A. Explicit type === 'status'
+        for f in fields:
+            if f.get("type") == "status":
+                status_field = f
+                break
+        # B. Well-known status field machine identifiers
+        if not status_field:
+            for f in fields:
+                n = str(f.get("name", "")).lower()
+                if n in ("crm_status", "status", "stage", "pipeline_stage", "lead_stage", "workflow_status"):
+                    status_field = f
+                    break
+        # C. Field options match configured pipeline stages
+        if not status_field and stages:
+            lower_stages = {s.lower().strip() for s in stages}
+            for f in fields:
+                opts = f.get("options", [])
+                if opts and sum(1 for o in opts if str(o).lower().strip() in lower_stages) >= min(2, len(stages)):
+                    status_field = f
+                    break
+        # D. Field label contains 'status' or 'stage'
+        if not status_field:
+            for f in fields:
+                lbl = str(f.get("label", "")).lower()
+                if "status" in lbl or "stage" in lbl:
+                    status_field = f
+                    break
+
+    status_field_name = status_field.get("name") if status_field else "status"
+    status_field_label = status_field.get("label", "Status") if status_field else "Status"
+
+    # 2. Canonical Status Aggregation
+    stage_counts: dict[str, int] = {s: 0 for s in stages}
+    stage_map_lower = {s.lower().strip(): s for s in stages}
+    missing_status_count = 0
+
+    for r in records:
+        r_data = r.get("data", {}) if isinstance(r, dict) else {}
+        raw_val = r_data.get(status_field_name)
+        if raw_val is None or str(raw_val).strip() == "":
+            if status_field_name not in ("status", "stage"):
+                raw_val = r_data.get("status") or r_data.get("stage")
+
+        if raw_val is None or str(raw_val).strip() == "":
+            missing_status_count += 1
+        else:
+            val_str = str(raw_val).strip()
+            matched = stage_map_lower.get(val_str.lower())
+            if matched:
+                stage_counts[matched] += 1
+            else:
+                stage_counts[val_str] = stage_counts.get(val_str, 0) + 1
+
+    canonical_status_distribution = [
+        {
+            "status": stage_val,
+            "value": stage_val,
+            "name": stage_val,
+            "count": count,
+            "percentage": round((count / total) * 100, 1) if total > 0 else 0.0,
+        }
+        for stage_val, count in stage_counts.items()
+    ]
+
+    # 3. Source Distribution
+    source_counts: dict[str, int] = {}
+    for r in records:
+        src = (r.get("source") if isinstance(r, dict) else None) or "Manual"
+        source_counts[src] = source_counts.get(src, 0) + 1
+
+    by_source = [
+        {
+            "value": src_val,
+            "count": count,
+            "percentage": round((count / total) * 100, 1) if total > 0 else 0.0,
+        }
+        for src_val, count in source_counts.items()
+    ]
+
+    # 4. Numeric & Categorical Metrics
+    numeric_metrics: dict[str, Any] = {}
+    categorical_metrics: dict[str, Any] = {}
+    kpi_cards: list[dict[str, Any]] = []
+
+    if primary_entity:
+        fields = primary_entity.get("fields", [])
+        for field in fields:
+            f_name = field.get("name")
+            f_label = field.get("label", f_name)
+            f_type = field.get("type")
+
+            if f_type in ("number", "currency"):
+                vals: list[float] = []
+                for r in records:
+                    r_data = r.get("data", {}) if isinstance(r, dict) else {}
+                    v = r_data.get(f_name)
+                    if v is not None and v != "":
+                        try:
+                            clean_str = str(v).replace("$", "").replace(",", "").strip()
+                            clean_v = float(clean_str)
+                            if clean_v == clean_v:
+                                vals.append(clean_v)
+                        except (ValueError, TypeError):
+                            pass
+
+                if vals:
+                    total_val = sum(vals)
+                    avg_val = total_val / len(vals)
+                    sorted_vals = sorted(vals)
+                    mid = len(sorted_vals) // 2
+                    med_val = (
+                        (sorted_vals[mid - 1] + sorted_vals[mid]) / 2.0
+                        if len(sorted_vals) % 2 == 0
+                        else sorted_vals[mid]
+                    )
+
+                    numeric_metrics[f_name] = {
+                        "label": f_label,
+                        "count": len(vals),
+                        "total": round(total_val, 2),
+                        "avg": round(avg_val, 2),
+                        "min": min(vals),
+                        "max": max(vals),
+                        "median": round(med_val, 2),
+                        "values": vals[:500],
+                    }
+
+                    if len(kpi_cards) < 2:
+                        kpi_cards.append({
+                            "label": f"Avg {f_label}",
+                            "value": f"${avg_val:,.0f}" if f_type == "currency" else f"{avg_val:,.1f}",
+                            "subtitle": f"Total: {'$' if f_type == 'currency' else ''}{total_val:,.0f}",
+                        })
+
+            # Exclude status field from categorical metrics to prevent duplicate/contradictory charts
+            elif f_type in ("select", "multi_select") and f_name != status_field_name and f_name not in ("status", "stage") and f_type != "status":
+                cat_counts: dict[str, int] = {}
+                for r in records:
+                    r_data = r.get("data", {}) if isinstance(r, dict) else {}
+                    v = str(r_data.get(f_name) or "Unknown")
+                    cat_counts[v] = cat_counts.get(v, 0) + 1
+
+                dist = [
+                    {
+                        "value": cat_val,
+                        "count": count,
+                        "percentage": round((count / total) * 100, 1) if total > 0 else 0.0,
+                    }
+                    for cat_val, count in cat_counts.items()
+                ]
+
+                categorical_metrics[f_name] = {
+                    "label": f_label,
+                    "distribution": dist,
+                }
+
+    return success_response({
+        "total_records": total,
+        "total_leads": total,
+        "conversion_rate": 0,
+        "status_distribution": canonical_status_distribution,
+        "by_stage": canonical_status_distribution,
+        "missing_status_count": missing_status_count,
+        "by_source": by_source,
+        "numeric_metrics": numeric_metrics,
+        "categorical_metrics": categorical_metrics,
+        "kpi_cards": kpi_cards,
+        "schema_info": {
+            "primary_entity_name": primary_name or "record",
+            "primary_entity_label": primary_label,
+            "stage_field_name": status_field_name,
+            "stage_field_label": status_field_label,
+            "pipeline_stages": stages,
+            "available_fields": [f.get("name") for f in primary_entity.get("fields", [])] if primary_entity else [],
+        },
+    })
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST-GENERATION CRM EDITING ENDPOINTS

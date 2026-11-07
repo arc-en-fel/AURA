@@ -98,9 +98,10 @@ class CRMRepository:
 
     def update_crm(self, crm_id: str, owner_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
         """Update CRM metadata. Enforces ownership and active status."""
+        safe_updates = {k: v for k, v in updates.items() if not (k == "configuration_version" and v is None)}
         result = (
             self._client.table("crms")
-            .update(updates)
+            .update(safe_updates)
             .eq("id", crm_id)
             .eq("owner_id", owner_id)
             .eq("status", "active")
@@ -128,30 +129,24 @@ class CRMRepository:
         # Validate configuration
         CRMConfiguration(**configuration)
         
-        # Update configuration and version
+        crm = self.get_crm(crm_id, owner_id)
+        if not crm:
+            return None
+        current_version = crm.get("configuration_version") or 1
+        new_version = current_version + 1
+        
+        # Update configuration and version atomically
         result = (
             self._client.table("crms")
             .update({
                 "configuration": configuration,
-                "configuration_version": self._client.rpc(
-                    "increment_config_version",
-                    {"p_crm_id": crm_id, "p_owner_id": owner_id}
-                ).data.get("configuration_version_after", 1) if False else None,  # Fallback
+                "configuration_version": new_version,
             })
             .eq("id", crm_id)
             .eq("owner_id", owner_id)
             .eq("status", "active")
             .execute()
         )
-        
-        if result.data:
-            # If simple update worked, try to increment version separately
-            try:
-                version_result = self.increment_config_version(crm_id, owner_id)
-                if version_result:
-                    return version_result
-            except:
-                pass
         
         return result.data[0] if result.data else None
 

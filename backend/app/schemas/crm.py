@@ -117,12 +117,30 @@ class CRMEntity(StrictModel):
         return self
 
 
+class UIConfig(BaseModel):
+    """Optional UI configuration for persisting visual metadata.
+
+    Uses permissive BaseModel (not StrictModel) so that new keys
+    can be added without breaking existing CRM configurations.
+    """
+    model_config = ConfigDict(extra="allow")
+
+    stage_colors: dict[str, str] = Field(
+        default_factory=dict,
+        description="Mapping of pipeline stage name to palette color key.",
+    )
+
+
 class CRMConfiguration(StrictModel):
     schema_version: Literal["1.0"] = "1.0"
     name: str = Field(min_length=1, max_length=120)
     industry: str = Field(min_length=1, max_length=80)
     entities: list[CRMEntity] = Field(min_length=1, max_length=30)
     pipeline_stages: list[str] = Field(default_factory=list, max_length=30)
+    ui_config: UIConfig | None = Field(
+        default=None,
+        description="Optional UI presentation metadata. Not required for operation.",
+    )
 
     @model_validator(mode="after")
     def unique_entities(self) -> "CRMConfiguration":

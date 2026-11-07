@@ -9,7 +9,16 @@ import re
 from typing import Any
 
 from app.schemas.crm import CRMConfiguration, CRMEntity, CRMField
+from app.services.csv_resolver import HeaderResolutionResult, normalize_header, resolve_csv_headers
 
+__all__ = [
+    "find_entity",
+    "validate_record_data",
+    "validate_csv_row",
+    "resolve_csv_headers",
+    "normalize_header",
+    "HeaderResolutionResult",
+]
 
 # Dangerous spreadsheet formula prefixes to neutralize in data
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
@@ -136,8 +145,15 @@ def validate_csv_row(
     entity: CRMEntity,
     row: dict[str, str],
     row_number: int,
+    pipeline_stages: list[str] | None = None,
+    value_mappings: dict[str, dict[str, str]] | None = None,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     """Validate a CSV row (all values are strings from CSV).
+
+    Supports:
+    - pipeline_stages: Fallback options for status fields when field.options is empty.
+    - value_mappings: Explicit user mappings from raw CSV values to canonical enum options.
+      Special target '__SKIP__' marks the row to be skipped per user choice.
 
     Returns (coerced_data, errors). If errors, coerced_data is None.
     """
@@ -150,9 +166,34 @@ def validate_csv_row(
         if key not in field_map:
             errors.append({"row": row_number, "code": "UNKNOWN_FIELD", "message": f"Unknown field '{key}'."})
 
+    # Apply value mappings if provided
+    processed_row: dict[str, str] = dict(row)
+    if value_mappings:
+        for key, raw_val in row.items():
+            if key in value_mappings and raw_val is not None:
+                val_trimmed = str(raw_val).strip()
+                field_mappings = value_mappings[key]
+                target_val = None
+                if val_trimmed in field_mappings:
+                    target_val = field_mappings[val_trimmed]
+                else:
+                    # Case-insensitive lookup in mappings
+                    matched_k = next((k for k in field_mappings if k.lower() == val_trimmed.lower()), None)
+                    if matched_k:
+                        target_val = field_mappings[matched_k]
+
+                if target_val is not None:
+                    if target_val == "__SKIP__":
+                        return None, [{
+                            "row": row_number,
+                            "code": "USER_SKIPPED",
+                            "message": f"Row skipped per user mapping rule for field '{key}' (value: '{val_trimmed}')."
+                        }]
+                    processed_row[key] = target_val
+
     # Check required fields
     for field in entity.fields:
-        if field.required and (field.name not in row or not row[field.name].strip()):
+        if field.required and (field.name not in processed_row or not str(processed_row[field.name]).strip()):
             errors.append({
                 "row": row_number,
                 "code": "MISSING_REQUIRED",
@@ -160,12 +201,12 @@ def validate_csv_row(
             })
 
     # Validate and coerce
-    for key, raw_value in row.items():
+    for key, raw_value in processed_row.items():
         field = field_map.get(key)
         if not field:
             continue
 
-        value = raw_value.strip()
+        value = raw_value.strip() if isinstance(raw_value, str) else str(raw_value or "").strip()
         if not value:
             if not field.required:
                 continue
@@ -173,7 +214,7 @@ def validate_csv_row(
             continue
 
         try:
-            coerced_val = _coerce_csv_value(field, value)
+            coerced_val = _coerce_csv_value(field, value, pipeline_stages=pipeline_stages)
             coerced[key] = _sanitize_string(coerced_val) if isinstance(coerced_val, str) else coerced_val
         except ValueError as e:
             errors.append({"row": row_number, "code": _error_code_for_type(field.type), "message": str(e)})
@@ -183,25 +224,34 @@ def validate_csv_row(
     return coerced, []
 
 
-def _coerce_csv_value(field: CRMField, value: str) -> Any:
+def _coerce_csv_value(
+    field: CRMField,
+    value: str,
+    pipeline_stages: list[str] | None = None,
+) -> Any:
     """Coerce a CSV string value to the appropriate type."""
     match field.type:
-        case "text" | "textarea" | "phone":
+        case "text" | "textarea" | "phone" | "url":
             return value
         case "email":
             if not _EMAIL_RE.match(value):
                 raise ValueError(f"Invalid email: {value}")
             return value
-        case "number":
+        case "number" | "currency":
+            cleaned = value.replace("$", "").replace("€", "").replace("£", "").replace(",", "").strip()
             try:
-                if "." in value:
-                    return float(value)
-                return int(value)
+                if "." in cleaned:
+                    return float(cleaned)
+                return int(cleaned)
             except (ValueError, TypeError):
                 raise ValueError(f"Invalid number: {value}")
         case "date":
             if not re.match(r"^\d{4}-\d{2}-\d{2}", value):
                 raise ValueError(f"Invalid date format: {value}")
+            return value
+        case "datetime":
+            if not re.match(r"^\d{4}-\d{2}-\d{2}", value):
+                raise ValueError(f"Invalid datetime format: {value}")
             return value
         case "boolean":
             lower = value.lower()
@@ -210,10 +260,31 @@ def _coerce_csv_value(field: CRMField, value: str) -> Any:
             if lower in ("false", "0", "no"):
                 return False
             raise ValueError(f"Invalid boolean: {value}")
-        case "select":
-            if field.options and value not in field.options:
-                raise ValueError(f"Value '{value}' not in options: {field.options}")
+        case "select" | "status":
+            options = field.options
+            if not options and field.type == "status" and pipeline_stages:
+                options = pipeline_stages
+            if options:
+                if value in options:
+                    return value
+                # Case-insensitive fallback to canonical option
+                matched = next((opt for opt in options if opt.lower() == value.lower()), None)
+                if matched is not None:
+                    return matched
+                raise ValueError(f"Value '{value}' not in options: {options}")
             return value
+        case "multi_select":
+            items = [i.strip() for i in re.split(r"[,;]", value) if i.strip()]
+            options = field.options
+            if options:
+                canonical_items = []
+                for item in items:
+                    matched = next((opt for opt in options if opt.lower() == item.lower()), None)
+                    if matched is None:
+                        raise ValueError(f"Option '{item}' not in allowed options: {options}")
+                    canonical_items.append(matched)
+                return canonical_items
+            return items
         case _:
             raise ValueError(f"Unsupported field type: {field.type}")
 
@@ -223,7 +294,12 @@ def _error_code_for_type(field_type: str) -> str:
     return {
         "email": "INVALID_EMAIL",
         "number": "INVALID_NUMBER",
+        "currency": "INVALID_NUMBER",
         "date": "INVALID_DATE",
+        "datetime": "INVALID_DATETIME",
         "boolean": "INVALID_BOOLEAN",
         "select": "INVALID_OPTION",
+        "status": "INVALID_OPTION",
+        "url": "INVALID_URL",
+        "multi_select": "INVALID_OPTION",
     }.get(field_type, "VALIDATION_ERROR")

@@ -20,15 +20,7 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Simulated demo user for local evaluation/testing
-const DEMO_USER: User = {
-  id: '00000000-0000-0000-0000-000000000001',
-  app_metadata: {},
-  user_metadata: { name: 'Demo Administrator' },
-  aud: 'authenticated',
-  created_at: new Date().toISOString(),
-  email: 'demo@aura-crm.io',
-};
+// Production authentication strictly requires valid Supabase session
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -71,13 +63,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         subscription.unsubscribe();
       };
     } else {
-      // If Supabase credentials are not configured, check if demo user was explicitly chosen
-      const isDemoStored = localStorage.getItem('aura_demo_session') === 'true';
-      if (isDemoStored) {
-        setUser(DEMO_USER);
-        setUseMockMode(true);
-        setIsMockModeState(true);
-      }
+      // Credentials not configured; require user to provide configuration
+      setUser(null);
+      setSession(null);
       setIsLoading(false);
     }
   }, []);
@@ -114,6 +102,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signOut = async () => {
     localStorage.removeItem('aura_demo_session');
+    localStorage.removeItem('aura_selected_crm_id');
     setUseMockMode(false);
     setIsMockModeState(false);
     if (isSupabaseConfigured) {
@@ -177,10 +166,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const loginAsDemoUser = () => {
-    localStorage.setItem('aura_demo_session', 'true');
-    setUseMockMode(true);
-    setIsMockModeState(true);
-    setUser(DEMO_USER);
+    // Disabled in production
   };
 
   const toggleMockMode = (enabled: boolean) => {

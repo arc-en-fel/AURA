@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Database,
   Plus,
@@ -13,6 +13,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useCRM } from '@/context/CRMContext';
+import { buildStageColorMap, getStageColor, getCategoryColor } from '@/utils/crmColors';
 import { CRMRecord } from '@/types/crm';
 import { api } from '@/services/api';
 import { Button } from '@/components/ui/Button';
@@ -29,6 +30,15 @@ export const RecordsPage: React.FC = () => {
   const { activeCRM, activeEntity, setActiveEntityByName } = useCRM();
   const { success, error: toastError } = useToast();
   const navigate = useNavigate();
+
+  const stageColorMap = useMemo(() => {
+    if (!activeCRM) return {};
+    return buildStageColorMap(
+      activeCRM.crm_id,
+      activeCRM.configuration.pipeline_stages || [],
+      activeCRM.configuration.ui_config?.stage_colors
+    );
+  }, [activeCRM]);
 
   const [records, setRecords] = useState<CRMRecord[]>([]);
   const [total, setTotal] = useState<number>(0);
@@ -134,7 +144,7 @@ export const RecordsPage: React.FC = () => {
     );
   });
 
-  const renderCellContent = (value: unknown, type: string) => {
+  const renderCellContent = (value: unknown, type: string, fieldName?: string) => {
     if (value === null || value === undefined || value === '') {
       return <span className="text-slate-300">—</span>;
     }
@@ -180,9 +190,19 @@ export const RecordsPage: React.FC = () => {
     }
 
     if (type === 'status') {
+      const stageStr = String(value);
+      const color = getStageColor(stageColorMap, stageStr);
       return (
-        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-          {String(value)}
+        <span
+          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border inline-block max-w-[160px] truncate transition-colors ${color.bgClass} ${color.textClass} ${color.borderClass}`}
+          style={{
+            backgroundColor: color.bgHex,
+            borderColor: color.borderHex,
+            color: color.textHex,
+          }}
+          title={stageStr}
+        >
+          {stageStr}
         </span>
       );
     }
@@ -214,9 +234,21 @@ export const RecordsPage: React.FC = () => {
     }
 
     if (type === 'select') {
+      const valStr = String(value);
+      const color = activeCRM
+        ? getCategoryColor(activeCRM.crm_id, fieldName || 'category', valStr)
+        : getStageColor(stageColorMap, valStr);
       return (
-        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
-          {String(value)}
+        <span
+          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border inline-block max-w-[160px] truncate transition-colors ${color.bgClass} ${color.textClass} ${color.borderClass}`}
+          style={{
+            backgroundColor: color.bgHex,
+            borderColor: color.borderHex,
+            color: color.textHex,
+          }}
+          title={valStr}
+        >
+          {valStr}
         </span>
       );
     }
@@ -355,7 +387,7 @@ export const RecordsPage: React.FC = () => {
                     >
                       {activeEntity.fields.map((f) => (
                         <td key={f.name} className="py-3 px-4 text-aura-charcoal">
-                          {renderCellContent(record.data[f.name], f.type)}
+                          {renderCellContent(record.data[f.name], f.type, f.name)}
                         </td>
                       ))}
 
@@ -527,6 +559,7 @@ export const RecordsPage: React.FC = () => {
           onClose={() => setIsCSVModalOpen(false)}
           crmId={activeCRM.crm_id}
           entity={activeEntity}
+          pipelineStages={activeCRM?.configuration?.pipeline_stages}
           onSuccess={fetchRecords}
         />
       )}

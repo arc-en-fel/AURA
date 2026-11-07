@@ -1,10 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Sparkles,
   Layers,
   Database,
-  GitBranch,
   Dna,
   ArrowRight,
   TrendingUp,
@@ -12,6 +11,7 @@ import {
   FileSpreadsheet,
 } from 'lucide-react';
 import { useCRM } from '@/context/CRMContext';
+import { buildStageColorMap, getStageColor } from '@/utils/crmColors';
 import { useAuth } from '@/context/AuthContext';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -24,6 +24,15 @@ export const DashboardPage: React.FC = () => {
   const { user } = useAuth();
   const { crms, activeCRM, selectCRM, isLoading } = useCRM();
   const navigate = useNavigate();
+
+  const stageColorMap = useMemo(() => {
+    if (!activeCRM) return {};
+    return buildStageColorMap(
+      activeCRM.crm_id,
+      activeCRM.configuration.pipeline_stages || [],
+      activeCRM.configuration.ui_config?.stage_colors
+    );
+  }, [activeCRM]);
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
 
   useEffect(() => {
@@ -158,7 +167,7 @@ export const DashboardPage: React.FC = () => {
                     <h3 className="text-lg font-bold text-aura-navy">
                       {activeCRM.name}
                     </h3>
-                    <Badge variant={activeCRM.status}>{activeCRM.status}</Badge>
+                    <Badge variant="cyan">Selected Workspace</Badge>
                     <Badge variant="cyan">v{activeCRM.configuration_version}</Badge>
                   </div>
                   <p className="text-xs text-slate-500 mt-1">
@@ -227,16 +236,30 @@ export const DashboardPage: React.FC = () => {
                     Pipeline Stages
                   </h4>
                   <div className="flex flex-wrap items-center gap-2">
-                    {activeCRM.configuration.pipeline_stages.map((stage, i) => (
-                      <React.Fragment key={stage}>
-                        <div className="px-3 py-1 rounded-lg bg-slate-100 text-xs font-semibold text-aura-navy border border-slate-200">
-                          {stage}
-                        </div>
-                        {i < activeCRM.configuration.pipeline_stages.length - 1 && (
-                          <ArrowRight className="w-3.5 h-3.5 text-slate-300 shrink-0" />
-                        )}
-                      </React.Fragment>
-                    ))}
+                    {activeCRM.configuration.pipeline_stages.map((stage, i) => {
+                      const color = getStageColor(stageColorMap, stage);
+                      return (
+                        <React.Fragment key={stage}>
+                          <div
+                            className={`px-3 py-1 rounded-lg text-xs font-semibold border flex items-center gap-1.5 ${color.bgClass} ${color.textClass} ${color.borderClass}`}
+                            style={{
+                              backgroundColor: color.bgHex,
+                              borderColor: color.borderHex,
+                              color: color.textHex,
+                            }}
+                          >
+                            <span
+                              className="w-1.5 h-1.5 rounded-full shrink-0"
+                              style={{ backgroundColor: color.hex }}
+                            />
+                            {stage}
+                          </div>
+                          {i < activeCRM.configuration.pipeline_stages.length - 1 && (
+                            <ArrowRight className="w-3.5 h-3.5 text-slate-300 shrink-0" />
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -267,24 +290,6 @@ export const DashboardPage: React.FC = () => {
                   leftIcon={<FileSpreadsheet className="w-4 h-4 text-emerald-600" />}
                 >
                   Import CSV Dataset
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="w-full justify-start text-xs font-semibold"
-                  onClick={() => navigate('/evolution')}
-                  leftIcon={<Dna className="w-4 h-4 text-amber-500" />}
-                >
-                  Evolution Proposal Center
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="w-full justify-start text-xs font-semibold"
-                  onClick={() => navigate('/workflows')}
-                  leftIcon={<GitBranch className="w-4 h-4 text-aura-deep" />}
-                >
-                  Workflow Automations
                 </Button>
               </div>
             </Card>

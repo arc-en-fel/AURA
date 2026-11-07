@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
+  CheckCircle,
   Database,
   GitBranch,
   BarChart3,
@@ -26,14 +27,26 @@ import { TableSkeleton } from '@/components/ui/LoadingSkeleton';
 import { useCRM } from '@/context/CRMContext';
 import { useToast } from '@/context/ToastContext';
 import { CRMSchemaEditor } from '@/components/CRMSchemaEditor/CRMSchemaEditor';
+import { buildStageColorMap, getStageColor } from '@/utils/crmColors';
 
 export const CRMDetailPage: React.FC = () => {
   const { crmId } = useParams<{ crmId: string }>();
   const navigate = useNavigate();
-  const { selectCRM, setActiveEntityByName } = useCRM();
+
+
+  const { activeCRM, selectCRM, setActiveEntityByName } = useCRM();
   const { success, error: toastError } = useToast();
 
   const [crm, setCrm] = useState<CRMSummary | null>(null);
+
+  const stageColorMap = useMemo(() => {
+    if (!crm) return {};
+    return buildStageColorMap(
+      crm.crm_id,
+      crm.configuration.pipeline_stages || [],
+      crm.configuration.ui_config?.stage_colors
+    );
+  }, [crm]);
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowData[]>([]);
   const [proposals, setProposals] = useState<EvolutionProposal[]>([]);
@@ -144,11 +157,32 @@ export const CRMDetailPage: React.FC = () => {
           </Button>
           <div className="h-4 w-px bg-slate-200" />
           <h2 className="text-xl font-bold text-aura-navy">{crm.name}</h2>
-          <Badge variant={crm.status}>{crm.status}</Badge>
+          {activeCRM?.crm_id === crm.crm_id ? (
+            <Badge variant="cyan">Selected Workspace</Badge>
+          ) : (
+            <Badge variant={crm.status === 'active' ? 'neutral' : 'archived'}>
+              {crm.status === 'active' ? 'Available' : 'Archived'}
+            </Badge>
+          )}
           <Badge variant="cyan">v{crm.configuration_version}</Badge>
         </div>
 
         <div className="flex items-center gap-2">
+          {activeCRM?.crm_id !== crm.crm_id ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => selectCRM(crm.crm_id)}
+              leftIcon={<CheckCircle className="w-4 h-4 text-aura-cyan" />}
+            >
+              Select Workspace
+            </Button>
+          ) : (
+            <span className="text-xs font-semibold text-aura-navy flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-50 border border-cyan-200">
+              <CheckCircle className="w-3.5 h-3.5 text-aura-cyan" />
+              Active Workspace
+            </span>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -228,17 +262,30 @@ export const CRMDetailPage: React.FC = () => {
             Active Pipeline Stages
           </h3>
           <div className="flex flex-wrap items-center gap-2">
-            {crm.configuration.pipeline_stages.map((stage, idx) => (
-              <div key={stage} className="flex items-center gap-2">
-                <span className="px-3 py-1.5 rounded-lg bg-slate-100 border border-slate-200 text-xs font-bold text-aura-navy flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-aura-cyan" />
-                  {stage}
-                </span>
-                {idx < crm.configuration.pipeline_stages.length - 1 && (
-                  <span className="text-slate-300 font-bold">→</span>
-                )}
-              </div>
-            ))}
+            {crm.configuration.pipeline_stages.map((stage, idx) => {
+              const color = getStageColor(stageColorMap, stage);
+              return (
+                <div key={stage} className="flex items-center gap-2">
+                  <span
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1.5 ${color.bgClass} ${color.textClass} ${color.borderClass}`}
+                    style={{
+                      backgroundColor: color.bgHex,
+                      borderColor: color.borderHex,
+                      color: color.textHex,
+                    }}
+                  >
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: color.hex }}
+                    />
+                    {stage}
+                  </span>
+                  {idx < crm.configuration.pipeline_stages.length - 1 && (
+                    <span className="text-slate-300 font-bold">→</span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </Card>
       )}

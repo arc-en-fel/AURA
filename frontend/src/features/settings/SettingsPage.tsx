@@ -2,18 +2,15 @@ import React, { useState, useEffect } from 'react';
 import {
   Server,
   Shield,
-  Cpu,
   RefreshCw,
   Key,
 } from 'lucide-react';
-import { useAuth } from '@/context/AuthContext';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { supabase, isSupabaseConfigured } from '@/services/supabase';
 
 export const SettingsPage: React.FC = () => {
-  const { isMockMode, toggleMockMode } = useAuth();
 
   const [backendHealth, setBackendHealth] = useState<'checking' | 'connected' | 'offline'>('checking');
   const [backendDetails, setBackendDetails] = useState<{
@@ -89,10 +86,9 @@ export const SettingsPage: React.FC = () => {
         });
       });
     } else {
-      const isDemo = localStorage.getItem('aura_demo_session') === 'true';
       setAuthStatus({
         state: 'missing',
-        sessionState: isDemo ? 'Demo Memory Session (Temporary Evaluation)' : 'Missing Configuration in frontend/.env',
+        sessionState: 'Missing Configuration in frontend/.env',
       });
     }
   }, []);
@@ -100,13 +96,13 @@ export const SettingsPage: React.FC = () => {
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       <div>
-        <h2 className="text-xl font-bold text-aura-navy">System Settings & Integration Status</h2>
+        <h2 className="text-xl font-bold text-aura-navy">System Settings &amp; Integration Status</h2>
         <p className="text-xs text-slate-500 mt-1">
-          Inspect API boundaries, Supabase authentication state, and backend connectivity.
+          Inspect Supabase authentication state and backend connectivity.
         </p>
       </div>
 
-      {/* Connectivity & Service Status Grid */}
+      {/* Connectivity &amp; Service Status Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         {/* FastAPI Backend Status */}
         <Card className="p-5 space-y-3">
@@ -121,7 +117,7 @@ export const SettingsPage: React.FC = () => {
               </div>
             </div>
             {backendHealth === 'connected' ? (
-              <Badge variant="active">Connected & Healthy</Badge>
+              <Badge variant="active">Connected &amp; Healthy</Badge>
             ) : backendHealth === 'checking' ? (
               <Badge variant="draft">Checking...</Badge>
             ) : (
@@ -192,83 +188,14 @@ export const SettingsPage: React.FC = () => {
         </Card>
       </div>
 
-      {/* Mock Adapter vs Real Mode Switcher */}
-      <Card className="p-5 space-y-3 border-aura-cyan/40">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center text-amber-600">
-              <Cpu className="w-4 h-4" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-bold text-sm text-aura-navy">Frontend Adapter Mode</h3>
-                <Badge variant={isMockMode ? 'pending' : 'active'}>
-                  {isMockMode ? 'Mock Adapter' : 'FastAPI Live'}
-                </Badge>
-              </div>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Switch between live FastAPI network calls and standalone in-memory mock adapter.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <Button
-              variant={isMockMode ? 'yellow' : 'outline'}
-              size="sm"
-              onClick={() => toggleMockMode(true)}
-            >
-              Mock Adapter
-            </Button>
-            <Button
-              variant={!isMockMode ? 'primary' : 'outline'}
-              size="sm"
-              onClick={() => toggleMockMode(false)}
-            >
-              FastAPI Live
-            </Button>
-          </div>
-        </div>
-
-        {!isMockMode && backendHealth === 'offline' && (
-          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
-            <span className="font-bold">Notice:</span> FastAPI Live mode is active, but the backend is currently offline. Start the backend using <code className="bg-amber-100 px-1 py-0.5 rounded font-mono text-[11px]">.\start-dev.bat</code> on port 8000.
-          </div>
-        )}
-      </Card>
-
-      {/* Member 3 & Architecture Boundaries Card */}
-      <Card className="p-5 space-y-4">
-        <h3 className="text-sm font-bold text-aura-navy uppercase tracking-wider">
-          Hackathon Architecture Boundaries
-        </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
-            <p className="font-bold text-aura-deep">Member 3 (Frontend & Integration)</p>
-            <p className="text-slate-500 mt-1">
-              React + TypeScript UI, dynamic CRM rendering, Supabase session handling, envelope validation, and responsive aesthetics.
-            </p>
-          </div>
-          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
-            <p className="font-bold text-aura-navy">Member 2 (Backend & Database)</p>
-            <p className="text-slate-500 mt-1">
-              FastAPI routers, Supabase PostgreSQL persistence, RLS policies, migrations, and JWT verification.
-            </p>
-          </div>
-          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
-            <p className="font-bold text-emerald-800">Member 1 (AI Generation Provider)</p>
-            <p className="text-slate-500 mt-1">
-              Natural-language schema generation, Hugging Face/Ollama/Grok provider interface, and proposal reasoning.
-            </p>
-          </div>
-          <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
-            <p className="font-bold text-indigo-800">Member 4 (Ingestion & Evolution)</p>
-            <p className="text-slate-500 mt-1">
-              CSV data validation, workflow engine, analytics calculation, and two-stage evolutionary triggers.
-            </p>
-          </div>
-        </div>
-      </Card>
+      {/* Backend Integration Notice */}
+      {backendHealth === 'offline' && (
+        <Card className="p-4 border-amber-300 bg-amber-50/60">
+          <p className="text-xs text-amber-800">
+            <span className="font-bold">Notice:</span> The FastAPI backend at port 8000 is currently unreachable. Start the backend service using <code className="bg-amber-100 px-1.5 py-0.5 rounded font-mono text-[11px]">.\start-dev.bat</code>.
+          </p>
+        </Card>
+      )}
     </div>
   );
 };
